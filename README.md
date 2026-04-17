@@ -357,12 +357,12 @@ pm2 monit             # 监控面板
 
 #### 6. 部署前端网站
 
-如需单独部署或定制前端界面，请参考前端仓库：
+如需单独部署或定制前端界面，请直接使用本仓库下的 `Toonflow-web/` 目录：
 
-- **GitHub**：[Toonflow-web](https://github.com/HBAI-Ltd/Toonflow-web)
-- **Gitee**：[Toonflow-web](https://gitee.com/HBAI-Ltd/Toonflow-web)
+- 前端源码目录：`Toonflow-web/`
+- 前端构建产物集成目录：`data/web/`
 
-> 💡 **说明**：本仓库已内置编译好的前端资源，普通用户无需单独部署前端。前端仓库仅供需要二次开发的开发者使用。
+> 💡 **说明**：本仓库已内置编译好的前端资源，普通用户无需单独部署前端。需要二次开发时，直接在本仓库内修改 `Toonflow-web/` 即可。
 
 ---
 
@@ -563,10 +563,9 @@ pm2 monit             # 监控面板
 
 | 仓库             | 说明                               | GitHub                                             | Gitee                                            |
 | ---------------- | ---------------------------------- | -------------------------------------------------- | ------------------------------------------------ |
-| **Toonflow-app** | 完整客户端（本仓库，推荐普通用户） | [GitHub](https://github.com/HBAI-Ltd/Toonflow-app) | [Gitee](https://gitee.com/HBAI-Ltd/Toonflow-app) |
-| **Toonflow-web** | 前端源代码（适合前端开发者）       | [GitHub](https://github.com/HBAI-Ltd/Toonflow-web) | [Gitee](https://gitee.com/HBAI-Ltd/Toonflow-web) |
+| **Toonflow-app** | 完整客户端与前端源码（本仓库） | [GitHub](https://github.com/HBAI-Ltd/Toonflow-app) | [Gitee](https://gitee.com/HBAI-Ltd/Toonflow-app) |
 
-> 💡 **提示**：如果您只是想使用 Toonflow，直接下载本仓库的客户端即可。前端仓库仅供需要二次开发或定制前端界面的开发者使用。
+> 💡 **提示**：如果您需要二次开发前端，请直接使用本仓库中的 `Toonflow-web/` 目录。
 
 ---
 

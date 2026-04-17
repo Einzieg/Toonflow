@@ -10,8 +10,14 @@ data/
 *.sqlite
 *.sqlite3
 
-# Separate frontend repository
-Toonflow-web/
+# Frontend workspace local artifacts
+Toonflow-web/.git.embedded-backup/
+Toonflow-web/node_modules/
+Toonflow-web/dist/
+Toonflow-web/dist-ssr/
+Toonflow-web/coverage/
+Toonflow-web/oss/
+Toonflow-web/backup/
 
 # Dependencies and logs
 node_modules/
