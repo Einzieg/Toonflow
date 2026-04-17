@@ -1,0 +1,24 @@
+.codex
+.codex/
+
+# Build output
+build/
+
+# Runtime data and generated artifacts
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Separate frontend repository
+Toonflow-web/
+
+# Dependencies and logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.*

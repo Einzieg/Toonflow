@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1775660935739,
+    "projectType": "novel",
+    "imageModel": "grsai:nano-banana-fast",
+    "imageQuality": "2K",
+    "videoModel": "volcengine:doubao-seedance-2-0-260128",
+    "name": "觉醒之渊",
+    "intro": "科幻",
+    "type": "科幻",
+    "artStyle": "3D_anime_render",
+    "directorManual": "Scifi_future_epic",
+    "mode": "[\"textReference\",\"videoReference\",\"imageReference\",\"audioReference\"]",
+    "videoRatio": "16:9",
+    "createTime": 1775723627883,
+    "userId": 1
+  },
+  {
+    "id": 1775856553954,
+    "projectType": "novel",
+    "imageModel": "grsai:nano-banana-fast",
+    "imageQuality": "2K",
+    "videoModel": "klingai:kling-v3-omni-std",
+    "name": "新新神崛起",
+    "intro": "科幻",
+    "type": "未来科幻",
+    "artStyle": "realpeople_urban_modern",
+    "directorManual": "Scifi_future_epic",
+    "mode": "startEndRequired",
+    "videoRatio": "16:9",
+    "createTime": 1775856553954,
+    "userId": 1
+  }
+]

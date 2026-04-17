@@ -1,0 +1,6 @@
+.codex
+.git
+node_modules
+backup
+data/oss
+data/temp
