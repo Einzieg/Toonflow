@@ -18,6 +18,7 @@
         <template v-if="showImage">
           <img
             v-if="shouldMountMedia"
+            :key="displaySrc"
             :src="displaySrc"
             :alt="frameLabel"
             class="frameImg"

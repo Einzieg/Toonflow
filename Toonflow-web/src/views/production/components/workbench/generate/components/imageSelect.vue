@@ -4,7 +4,7 @@
     <template v-if="mode == 'singleImage' || Array.isArray(parseMode(mode as string))">
       <div class="uploadBtn c fc" v-for="(item, index) in imageList" :key="index">
         <template v-if="item.src">
-          <t-image :src="item.src" fit="contain" class="uploadPreview">
+          <t-image :src="getItemPreviewSrc(item)" fit="contain" class="uploadPreview">
             <template #overlayContent></template>
           </t-image>
         </template>
@@ -30,7 +30,7 @@
       <div class="uploadBtn c fc" v-for="(item, index) in buildLabel" :key="item.value" @click="handleMixedAdd(item.value as 'start' | 'end')">
         <div v-if="!isEmptySlot(imageList?.[index])" style="flex: 1" class="ac">
           <template v-if="imageList?.[index]?.src">
-            <img class="uploadPreview" :src="imageList?.[index].src" />
+            <img class="uploadPreview" :src="getItemPreviewSrc(imageList[index])" loading="lazy" decoding="async" />
           </template>
           <template v-else>
             <t-tooltip theme="primary" :content="imageList?.[index]?.prompt || ''">
@@ -69,7 +69,7 @@
       placement="center">
       <div class="storyboardGrid">
         <div class="storyboardItem" v-for="sb in storyboardList" :key="sb.id" @click="pickStoryboard(sb)">
-          <img v-if="sb.src" :src="sb.src" />
+          <img v-if="sb.src" :src="getStoryboardPreviewSrc(sb)" loading="lazy" decoding="async" />
           <div v-else class="textBox ac jc">
             <t-tooltip theme="primary" :content="sb?.videoDesc || ''">
               <span style="font-size: 20px">{{ `分镜 ${sb?.index + 1 || ""}` }}</span>
@@ -85,6 +85,7 @@
 import { ref } from "vue";
 import "@/views/production/components/workbench/type/type";
 import assetsCheck, { type AssetType, type ClipMediaType } from "@/utils/assetsCheck";
+import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
 
 const props = defineProps<{
   mode: VideoMode;
@@ -157,6 +158,14 @@ function getFileTypeByExt(src: string | undefined): "image" | "video" | "audio" 
   if (["mp4", "webm", "mov", "avi", "mkv"].includes(ext)) return "video";
   if (["mp3", "wav", "ogg", "aac", "flac", "m4a"].includes(ext)) return "audio";
   return "image";
+}
+
+function getItemPreviewSrc(item?: UploadItem) {
+  return getPreviewImageSrc(undefined, item?.src, { width: 160, height: 160, format: "webp" });
+}
+
+function getStoryboardPreviewSrc(item: StoryboardItem) {
+  return getPreviewImageSrc((item as any).thumbSrc, item.src, { width: 320, format: "webp" });
 }
 /** 根据混合模式推导当前允许的 clip 媒体类型 */
 const mixedClipMediaTypes = computed<ClipMediaType[]>(() => {

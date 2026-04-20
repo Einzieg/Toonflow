@@ -31,6 +31,8 @@ export default router.post(
       .leftJoin("o_assets", "o_assets2Storyboard.assetId", "o_assets.id")
       .leftJoin("o_image", "o_assets.imageId", "o_image.id")
       .whereIn("o_assets2Storyboard.storyboardId", storyboardIds)
+      .orderBy("o_assets2Storyboard.storyboardId", "asc")
+      .orderBy("o_assets2Storyboard.rowid", "asc")
       .select("o_assets2Storyboard.storyboardId", "o_assets.id as assetId", "o_assets.name", "o_assets.type", "o_image.filePath as avatar");
 
     // 按 storyboardId 分组，生成 characters 列表

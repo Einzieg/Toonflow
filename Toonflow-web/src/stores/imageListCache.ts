@@ -27,6 +27,10 @@ function makeUrlKey(id: number | null | undefined, sources: string | undefined):
     return `${id ?? ""}:${sources ?? ""}`;
 }
 
+function hasResolvedUrl(urlMap: Record<string, string>, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(urlMap, key);
+}
+
 const TENCENT_COS_HOST_RE = /(^|\.)cos\.[^.]+\.myqcloud\.com$/i;
 
 function shouldKeepAbsoluteUrl(parsed: URL): boolean {
@@ -86,7 +90,7 @@ export default defineStore(
             const needResolve = items.filter((item) => {
                 if (item.id == null) return false;
                 const key = makeUrlKey(item.id, item.sources);
-                return !urlMap.value[key];
+                return !hasResolvedUrl(urlMap.value, key);
             });
 
             if (needResolve.length) {
@@ -114,6 +118,14 @@ export default defineStore(
                         });
                     }
 
+                    // 记录未解析成功的 key，避免后续继续回退到已失效的旧路径。
+                    needResolve.forEach((item) => {
+                        const key = makeUrlKey(item.id, item.sources);
+                        if (!hasResolvedUrl(resolved, key)) {
+                            resolved[key] = "";
+                        }
+                    });
+
                     // 替换整个对象以触发 Vue 响应式更新
                     urlMap.value = { ...urlMap.value, ...resolved };
                 } catch (e) {
@@ -124,7 +136,7 @@ export default defineStore(
             const result: Record<string, string> = {};
             items.forEach((item) => {
                 const key = makeUrlKey(item.id, item.sources);
-                result[key] = urlMap.value[key] || item.id?.toString() || "";
+                result[key] = hasResolvedUrl(urlMap.value, key) ? (urlMap.value[key] || "") : "";
             });
             return result;
         }
@@ -133,7 +145,7 @@ export default defineStore(
         function resolveUrlSync(id: number | null | undefined, sources: string | undefined, fallbackPath?: string): string {
             if (id != null) {
                 const key = makeUrlKey(id, sources);
-                if (urlMap.value[key]) return urlMap.value[key];
+                if (hasResolvedUrl(urlMap.value, key)) return urlMap.value[key] || "";
             }
             // 降级返回原始路径
             return fallbackPath || "";
@@ -239,6 +251,32 @@ export default defineStore(
         }
 
         /**
+         * 根据后端返回的轨道列表同步脚本级缓存：
+         * - 删除已不存在轨道的缓存
+         * - 为新增轨道建立初始缓存
+         * - 保留仍存在轨道的本地编辑
+         */
+        function syncCacheFromTrackList(projectId: CacheKey, scriptId: CacheKey, trackList: TrackItem[]): void {
+            if (!cacheData.value[projectId]) cacheData.value[projectId] = {};
+            if (!cacheData.value[projectId][scriptId]) cacheData.value[projectId][scriptId] = {};
+
+            const scriptCache = cacheData.value[projectId][scriptId];
+            const nextTrackIds = new Set(trackList.map((track) => String(track.id)).filter(Boolean));
+
+            Object.keys(scriptCache).forEach((trackId) => {
+                if (!nextTrackIds.has(String(trackId))) {
+                    delete scriptCache[trackId];
+                }
+            });
+
+            trackList.forEach((track) => {
+                if (track.id == null) return;
+                if (scriptCache[track.id]) return;
+                scriptCache[track.id] = toCachedItems(track.medias);
+            });
+        }
+
+        /**
          * 从后端返回的 trackList 强制覆盖缓存
          */
         function forceInitCacheFromTrackList(projectId: CacheKey, scriptId: CacheKey, trackList: TrackItem[]): void {
@@ -292,6 +330,7 @@ export default defineStore(
             removeCache,
             clearScriptCache,
             initCacheFromTrackList,
+            syncCacheFromTrackList,
             forceInitCacheFromTrackList,
             resolveUrls,
             resolveUrlSync,

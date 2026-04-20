@@ -127,6 +127,9 @@ let isUpdatingFromStore = false;
 // 防止并发同步的标志
 let isSyncing = false;
 let pendingSync = false;
+let scheduledCanvasSyncFrame: number | null = null;
+let shouldPreviewAfterSync = false;
+let shouldClearFrameCacheBeforeSync = false;
 
 // Canvas 尺寸（来自 props）
 const CANVAS_WIDTH = computed(() => props.canvasWidth);
@@ -452,6 +455,71 @@ async function getOtherClipFrame(clipId: string, globalTimeInSeconds: number): P
 // 帧缓存：用于存储每个 clip 最近渲染的帧（用于转场混合）
 const clipFrameCache = new Map<string, ImageBitmap>();
 
+// 将画布侧高频属性变化按帧批量回写到 store，避免拖拽时每个像素移动都触发整套响应式更新
+const pendingSpriteClipSyncMap = new Map<
+  string,
+  {
+    rect: {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      angle: number;
+      fixedAspectRatio?: boolean;
+      fixedScaleCenter?: boolean;
+    };
+    opacity: number;
+    visible: boolean;
+    flip: "horizontal" | "vertical" | null;
+    zIndex: number;
+  }
+>();
+let pendingSpriteClipSyncFrame: number | null = null;
+
+function clearFrameCache() {
+  for (const frame of clipFrameCache.values()) {
+    frame.close();
+  }
+  clipFrameCache.clear();
+}
+
+function scheduleCanvasSync(options?: { preview?: boolean; clearFrameCache?: boolean }) {
+  if (options?.preview) shouldPreviewAfterSync = true;
+  if (options?.clearFrameCache) shouldClearFrameCacheBeforeSync = true;
+  if (scheduledCanvasSyncFrame != null) return;
+
+  scheduledCanvasSyncFrame = requestAnimationFrame(async () => {
+    scheduledCanvasSyncFrame = null;
+
+    if (shouldClearFrameCacheBeforeSync) {
+      clearFrameCache();
+      shouldClearFrameCacheBeforeSync = false;
+    }
+
+    await syncClipsToCanvas();
+
+    if (shouldPreviewAfterSync && avCanvas && clipSpriteMap.size > 0 && !isPlaying.value) {
+      avCanvas.previewFrame(currentTime.value);
+    }
+    shouldPreviewAfterSync = false;
+  });
+}
+
+function flushPendingSpriteClipSync() {
+  pendingSpriteClipSyncFrame = null;
+  if (!pendingSpriteClipSyncMap.size) return;
+
+  isUpdatingFromCanvas = true;
+  for (const [clipId, payload] of pendingSpriteClipSyncMap) {
+    tracksStore.updateClip(clipId, payload);
+  }
+  pendingSpriteClipSyncMap.clear();
+
+  setTimeout(() => {
+    isUpdatingFromCanvas = false;
+  }, 0);
+}
+
 // 创建带滤镜和转场的 tickInterceptor
 // 注意：time 参数是 clip 内部的相对时间（微秒），需要转换为全局时间轴时间
 function createFilteredTickInterceptor(originalClip: Clip): ((time: number, tickRet: any) => Promise<any>) | undefined {
@@ -626,9 +694,12 @@ function createFilteredTickInterceptor(originalClip: Clip): ((time: number, tick
     }
 
     // 如果没有滤镜、特效和转场，缓存原始帧并直接返回
+    const participatesInTransition = clipTransitionsMap.has(originalClip.id);
     if (filters.length === 0 && effects.length === 0) {
-      // 缓存原始帧
-      await updateFrameCache(frame);
+      if (participatesInTransition) {
+        // 只有参与转场的 clip 才需要维持帧缓存，用于与相邻 clip 做混合
+        await updateFrameCache(frame);
+      }
       return tickRet;
     }
 
@@ -751,11 +822,7 @@ function syncSpriteToClip(clipId: string, sprite: VisibleSprite) {
   const clip = findClipById(clipId);
   if (!clip) return;
 
-  // 防止循环更新
-  isUpdatingFromCanvas = true;
-
-  // 更新 clip 的 rect 属性
-  tracksStore.updateClip(clipId, {
+  pendingSpriteClipSyncMap.set(clipId, {
     rect: {
       x: sprite.rect.x,
       y: sprite.rect.y,
@@ -771,11 +838,10 @@ function syncSpriteToClip(clipId: string, sprite: VisibleSprite) {
     zIndex: sprite.zIndex,
   });
 
-  // console.log(`[Sync] Sprite -> Clip ${clipId}:`, { rect: { x: sprite.rect.x, y: sprite.rect.y, w: sprite.rect.w, h: sprite.rect.h, angle: sprite.rect.angle }, opacity: sprite.opacity, });
-
-  setTimeout(() => {
-    isUpdatingFromCanvas = false;
-  }, 0);
+  if (pendingSpriteClipSyncFrame != null) return;
+  pendingSpriteClipSyncFrame = requestAnimationFrame(() => {
+    flushPendingSpriteClipSync();
+  });
 }
 
 // 为 sprite 设置属性变化监听
@@ -1340,19 +1406,13 @@ onMounted(async () => {
 watch(
   () => tracksStore.tracks,
   async () => {
-    // 清除帧缓存，确保删除滤镜/特效后画面立即更新
-    for (const frame of clipFrameCache.values()) {
-      frame.close();
-    }
-    clipFrameCache.clear();
-
-    await syncClipsToCanvas();
-    // 同步后显示当前帧
-    if (avCanvas && clipSpriteMap.size > 0 && !isPlaying.value) {
-      avCanvas.previewFrame(currentTime.value);
-    }
+    if (isUpdatingFromCanvas) return;
+    scheduleCanvasSync({
+      clearFrameCache: true,
+      preview: true,
+    });
   },
-  { deep: true },
+  { deep: true, flush: "post" },
 );
 
 // 监听 playbackStore 的时间变化（来自轨道编辑器的 seek）
@@ -1431,6 +1491,15 @@ watch(
 
 // 清理 AVCanvas
 onUnmounted(() => {
+  if (pendingSpriteClipSyncFrame != null) {
+    cancelAnimationFrame(pendingSpriteClipSyncFrame);
+    pendingSpriteClipSyncFrame = null;
+  }
+  if (scheduledCanvasSyncFrame != null) {
+    cancelAnimationFrame(scheduledCanvasSyncFrame);
+    scheduledCanvasSyncFrame = null;
+  }
+
   // 清理所有监听器
   for (const unsubscribe of spriteListenerMap.values()) {
     unsubscribe();
@@ -1444,14 +1513,10 @@ onUnmounted(() => {
   transitionInfoMap.clear();
   clipTransitionsMap.clear();
 
-  // 清理帧缓存
-  for (const frame of clipFrameCache.values()) {
-    frame.close();
-  }
-  clipFrameCache.clear();
-
   // 清理转场帧缓存
   transitionFrameCache.clear();
+
+  clearFrameCache();
 
   if (avCanvas) {
     avCanvas.destroy();

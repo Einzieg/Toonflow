@@ -121,6 +121,109 @@ const { addEdges, getNodes, getEdges, updateNodeData } = useVueFlow("editImage")
 const nodes = ref<NodeType[]>([]);
 const edges = ref<Edge<any, any, string>[]>([]);
 
+function getCanonicalReferenceImages() {
+  return Array.from(new Set((props.flowData.referanceImages ?? []).filter(Boolean)));
+}
+
+function getPrimaryResultImage() {
+  return props.flowData.resultImages?.[0] ?? { src: "", prompt: "" };
+}
+
+function createUploadNodeAt(image: string, position: { x: number; y: number }): NodeType {
+  return {
+    id: uuid(),
+    type: "upload",
+    position,
+    data: { image },
+  } as NodeType;
+}
+
+function createGeneratedNodeAt(
+  image: string,
+  prompt: string,
+  position: { x: number; y: number },
+  currentData?: Partial<GeneratedNodeData>,
+): NodeType {
+  return {
+    id: uuid(),
+    type: "generated",
+    position,
+    data: {
+      ...createGeneratedData(image, prompt),
+      model: currentData?.model ?? "",
+      ratio: currentData?.ratio ?? "",
+      quality: currentData?.quality ?? "",
+      generatedImage: image || currentData?.generatedImage || "",
+      prompt,
+      references: currentData?.references ?? [],
+    },
+  } as NodeType;
+}
+
+function normalizeStoryboardFlow(flow: { nodes: NodeType[]; edges: Edge<any, any, string>[] }) {
+  if (props.type !== "storyboard") return flow;
+
+  const canonicalReferenceImages = getCanonicalReferenceImages();
+  const primaryResultImage = getPrimaryResultImage();
+  const uploadNodes = flow.nodes.filter((node) => node.type === "upload");
+  const generatedNodes = flow.nodes.filter((node) => node.type === "generated");
+  const savedReferenceImages = uploadNodes.map((node) => node.data.image).filter(Boolean);
+  const primaryGeneratedNode = generatedNodes[0];
+
+  const referenceMismatch =
+    savedReferenceImages.length !== canonicalReferenceImages.length ||
+    canonicalReferenceImages.some((image, index) => savedReferenceImages[index] !== image);
+  const promptMismatch = (primaryGeneratedNode?.data.prompt ?? "") !== (primaryResultImage.prompt ?? "");
+  const resultImageMismatch =
+    Boolean(primaryResultImage.src) && (primaryGeneratedNode?.data.generatedImage ?? "") !== primaryResultImage.src;
+
+  if (!referenceMismatch && !promptMismatch && !resultImageMismatch) {
+    return flow;
+  }
+
+  const generatedNodesToKeep = generatedNodes.length
+    ? generatedNodes.map((node, index) => {
+        if (index !== 0) return node;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            prompt: primaryResultImage.prompt ?? "",
+            generatedImage: primaryResultImage.src || node.data.generatedImage || "",
+            references: [],
+          },
+        };
+      })
+    : [
+        createGeneratedNodeAt(
+          primaryResultImage.src ?? "",
+          primaryResultImage.prompt ?? "",
+          { x: 600, y: 100 },
+        ),
+      ];
+
+  const uploadNodesToKeep = canonicalReferenceImages.map((image, index) =>
+    createUploadNodeAt(image, uploadNodes[index]?.position ?? { x: 100, y: 100 + index * 350 }),
+  );
+
+  const uploadNodeIds = new Set(uploadNodes.map((node) => node.id));
+  const preservedNodes = flow.nodes.filter((node) => node.type !== "upload" && node.type !== "generated");
+  const preservedEdges = flow.edges.filter((edge) => !uploadNodeIds.has(edge.source) && !uploadNodeIds.has(edge.target));
+  const rebuiltEdges = generatedNodesToKeep.flatMap((targetNode) =>
+    uploadNodesToKeep.map((sourceNode) => ({
+      id: uuid(),
+      source: sourceNode.id,
+      target: targetNode.id,
+    })),
+  );
+
+  return {
+    ...flow,
+    nodes: [...uploadNodesToKeep, ...generatedNodesToKeep, ...preservedNodes],
+    edges: [...preservedEdges, ...rebuiltEdges] as Edge<any, any, string>[],
+  };
+}
+
 // 防抖定时器
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 function openStoryboardCheck(): Promise<Storyboard[]> {
@@ -259,9 +362,11 @@ onMounted(async () => {
       id: props.flowData.flowId,
     });
     if (!data) return buildFlow();
-    edges.value = data.edges.map((e: any) => ({ ...e, ...DEFAULT_EDGE_OPTIONS }));
-    nodes.value = data.nodes;
+    const normalizedFlow = normalizeStoryboardFlow(data);
+    edges.value = normalizedFlow.edges.map((e: any) => ({ ...e, ...DEFAULT_EDGE_OPTIONS }));
+    nodes.value = normalizedFlow.nodes;
     await nextTick();
+    syncReferences();
     setTimeout(() => fitView({ duration: 300 }), 100);
   } catch (e) {
     window.$message.error((e as any).message || $t("workbench.production.editImage.fetchFailed"));
@@ -271,7 +376,7 @@ onMounted(async () => {
 function buildFlow() {
   const uploadIds: string[] = [];
   const generatedIds: string[] = [];
-  props.flowData.referanceImages.forEach((i: string) => {
+  getCanonicalReferenceImages().forEach((i: string) => {
     uploadIds.push(addUploadNode("upload", i));
   });
   props.flowData.resultImages.forEach((i: { src: string; prompt: string }) => {

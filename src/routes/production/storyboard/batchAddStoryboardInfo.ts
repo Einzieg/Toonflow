@@ -4,6 +4,7 @@ import { z } from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { expandStoryboardItemsForDuration, planStoryboardTrackSegments } from "@/utils/storyboardTrack";
+import { normalizeStoryboardAssociateAssets, type StoryboardAssetProjectAsset } from "@/utils/storyboardAssetRefs";
 const router = express.Router();
 
 interface InputStoryboardItem {
@@ -103,6 +104,7 @@ export default router.post(
     const { data: rawData, scriptId, projectId }: { data: InputStoryboardItem[]; scriptId: number; projectId: number } = req.body;
     if (!rawData.length) return res.status(400).send({ success: false, message: "数据不能为空" });
     const data = expandStoryboardItemsForDuration<InputStoryboardItem>(rawData);
+    const projectAssets: StoryboardAssetProjectAsset[] = await u.db("o_assets").where({ projectId }).select("id", "name", "type");
     const replaceAll = rawData.length > 1;
     const existingStoryboards: ExistingStoryboardItem[] = await u
       .db("o_storyboard")
@@ -159,9 +161,20 @@ export default router.post(
         });
         id = Number(inserted[0]);
       }
-      if (item.associateAssetsIds?.length) {
+      const normalizedAssociateAssetsIds = normalizeStoryboardAssociateAssets(
+        {
+          associateAssetsIds: item.associateAssetsIds,
+          prompt: item.prompt,
+          videoDesc: item.videoDesc,
+        },
+        projectAssets,
+      );
+      const uniqueAssetIds = Array.from(
+        new Set(normalizedAssociateAssetsIds.filter((assetId): assetId is number => Number.isInteger(assetId))),
+      );
+      if (uniqueAssetIds.length) {
         await u.db("o_assets2Storyboard").insert(
-          item.associateAssetsIds.map((assetId: number) => ({
+          uniqueAssetIds.map((assetId: number) => ({
             assetId,
             storyboardId: id,
           })),
@@ -190,7 +203,7 @@ export default router.post(
     const storyboardData = await Promise.all(
       insertedStoryboards.map(async (i) => {
         return {
-          associateAssetsIds: await u.db("o_assets2Storyboard").where("storyboardId", i.id).select("assetId").pluck("assetId"),
+          associateAssetsIds: await u.db("o_assets2Storyboard").where("storyboardId", i.id).orderBy("rowid").pluck("assetId"),
           src: i.src ?? "",
           id: i.id,
           index: i.index,

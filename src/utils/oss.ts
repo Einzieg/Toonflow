@@ -41,6 +41,13 @@ function joinUrl(baseUrl: string, pathname: string): string {
   return `${normalizeBaseUrl(baseUrl)}/${pathname.replace(/^\/+/, "")}`;
 }
 
+function encodeUrlPath(userPath: string): string {
+  return normalizePosixPath(userPath)
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 function isProcessableImagePath(value: string): boolean {
   const normalizedValue = String(value || "").split("?")[0].split("#")[0].toLowerCase();
   return [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"].some((ext) => normalizedValue.endsWith(ext));
@@ -327,26 +334,57 @@ class OSS {
   }
 
   buildImagePreviewUrl(publicUrl: string, options?: { width?: number; height?: number; format?: "webp" | "jpeg" | "png" }): string {
-    if (!publicUrl || this.getProvider() !== "tencent-cos" || !isProcessableImagePath(publicUrl)) {
+    if (!publicUrl || !isProcessableImagePath(publicUrl)) {
       return publicUrl;
     }
 
-    const cosBaseUrl = this.getCosPublicBaseUrl();
-    if (!cosBaseUrl || !publicUrl.startsWith(`${cosBaseUrl}/`)) {
+    if (publicUrl.includes("/oss-preview/")) {
       return publicUrl;
     }
 
     const width = Math.max(0, Math.round(Number(options?.width || 0)));
     const height = Math.max(0, Math.round(Number(options?.height || 0)));
     const format = options?.format || "webp";
-    const processSegments = ["imageView2", "1"];
 
-    if (width > 0) processSegments.push("w", String(width));
-    if (height > 0) processSegments.push("h", String(height));
-    if (format) processSegments.push("format", format);
+    if (this.getProvider() === "tencent-cos") {
+      const cosBaseUrl = this.getCosPublicBaseUrl();
+      if (!cosBaseUrl || !publicUrl.startsWith(`${cosBaseUrl}/`)) {
+        return publicUrl;
+      }
 
-    const separator = publicUrl.includes("?") ? "&" : "?";
-    return `${publicUrl}${separator}${processSegments.join("/")}`;
+      const processSegments = ["imageView2", "1"];
+      if (width > 0) processSegments.push("w", String(width));
+      if (height > 0) processSegments.push("h", String(height));
+      if (format) processSegments.push("format", format);
+
+      const separator = publicUrl.includes("?") ? "&" : "?";
+      return `${publicUrl}${separator}${processSegments.join("/")}`;
+    }
+
+    const localPath = this.getLocalPathFromPublicUrl(publicUrl);
+    if (!localPath) {
+      return publicUrl;
+    }
+
+    const searchParams = new URLSearchParams();
+    if (width > 0) searchParams.set("w", String(width));
+    if (height > 0) searchParams.set("h", String(height));
+    if (format) searchParams.set("format", format);
+
+    const previewPath = `/oss-preview/${encodeUrlPath(localPath)}`;
+    const previewUrl = searchParams.size ? `${previewPath}?${searchParams.toString()}` : previewPath;
+    const staticBaseUrl = this.getStaticBaseUrl();
+    if (staticBaseUrl) {
+      return joinUrl(staticBaseUrl, previewUrl);
+    }
+    if (isEletron()) {
+      return `${this.getInternalBaseUrl()}${previewUrl}`;
+    }
+    return previewUrl;
+  }
+
+  resolveLocalAbsolutePath(userRelPath: string): string {
+    return resolveSafeLocalPath(userRelPath, this.rootDir);
   }
 
   getLocalPathFromPublicUrl(url: string): string | null {

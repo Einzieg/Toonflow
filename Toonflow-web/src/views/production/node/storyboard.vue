@@ -31,9 +31,9 @@
       </div>
       <div class="ac" style="gap: 10px">
         <t-button block @click="previewAll" :disabled="!storyboard.length">{{ $t("workbench.production.node.storyboard.gridPreview") }}</t-button>
-        <!-- <t-button block @click="batchGenerateImage" :disabled="!storyboard.length" :loading="generateLoading">
+        <t-button block @click="batchGenerateImage" :disabled="!storyboardIdsToGenerate.length" :loading="generateLoading">
           {{ $t("workbench.production.node.storyboard.batchGenerateImage") }}
-        </t-button> -->
+        </t-button>
       </div>
     </div>
     <editImage v-model="visible" v-if="visible" :flowData="currentRow" type="storyboard" @save="save" />
@@ -54,11 +54,12 @@ import { LoadingPlugin } from "tdesign-vue-next";
 import { Handle, Position, type Edge } from "@vue-flow/core";
 import axios from "@/utils/axios";
 import type { AssetItem, Storyboard } from "../utils/flowBuilder";
-import { buildTencentCosPreviewUrl, getPreviewImageSrc } from "../utils/imagePreview";
+import { appendCacheBust, getPreviewImageSrc, getVersionedPreviewImageSrc } from "../utils/imagePreview";
 import projectStore from "@/stores/project";
 import productionAgentStore from "@/stores/productionAgent";
+const productionAgent = productionAgentStore();
 const { project } = storeToRefs(projectStore());
-const { episodesId } = storeToRefs(productionAgentStore());
+const { episodesId } = storeToRefs(productionAgent);
 const editImage = defineAsyncComponent(() => import("../components/editImage/index.vue"));
 
 const props = defineProps<{
@@ -76,6 +77,7 @@ const visible = ref(false);
 const previewVisible = ref(false);
 const previewImages = ref<string[]>([]);
 const gridScale = useLocalStorage("storyboardGridScale", 1);
+const generateLoading = ref(false);
 
 const currentRow = ref<{
   flowId?: number | null;
@@ -154,27 +156,37 @@ const styleMaxSize = computed(() => {
   if (gridScale.value <= 1) return gridScale.value;
   return 1;
 });
-// async function batchGenerateImage() {
-// LoadingPlugin(true);
-// generateLoading.value = true;
-// try {
-//   await batchGenerateStoryboard();
-//   window.$message.success($t("workbench.production.node.storyboard.batchGenerateSuccess"));
-// } catch (e) {
-//   window.$message.error($t("workbench.production.node.storyboard.batchGenerateFailed"));
-// } finally {
-//   generateLoading.value = false;
-// }
-// const allIds = (storyboard.value ?? []).filter((s) => s.src).map((s) => s.id!);
-// if (!allIds.length) {
-//   window.$message.warning($t("workbench.production.node.storyboard.noPreviewImages"));
-//   LoadingPlugin(false);
-//   return;
-// }
-// axios.post("/production/storyboard/batchGenerateImage", {
-//   scriptId: allIds,
-// });
-// }
+const allStoryboardIds = computed(() =>
+  Array.from(
+    new Set(
+      (storyboard.value ?? [])
+        .filter((item) => item.id && item.shouldGenerateImage !== 0 && item.prompt?.trim())
+        .map((item) => item.id as number),
+    ),
+  ),
+);
+const pendingStoryboardIds = computed(() =>
+  allStoryboardIds.value.filter((id) => {
+    const item = storyboard.value.find((storyboardItem) => storyboardItem.id === id);
+    return !item?.src || item.state === "未生成" || item.state === "生成失败";
+  }),
+);
+const storyboardIdsToGenerate = computed(() => pendingStoryboardIds.value.length ? pendingStoryboardIds.value : allStoryboardIds.value);
+
+async function batchGenerateImage() {
+  if (!storyboardIdsToGenerate.value.length) return;
+  LoadingPlugin(true);
+  generateLoading.value = true;
+  try {
+    await productionAgent.batchGenerateStoryboard(storyboardIdsToGenerate.value);
+    window.$message.success($t("workbench.production.node.storyboard.batchGenerateSuccess"));
+  } catch (e) {
+    window.$message.error((e as Error)?.message ?? $t("workbench.production.node.storyboard.batchGenerateFailed"));
+  } finally {
+    generateLoading.value = false;
+    LoadingPlugin(false);
+  }
+}
 function editStoryboaryImage(item: Storyboard, images: string[], insertAfterIndex: number | null = null) {
   currentRowStoryboardInfo.value = {
     id: insertAfterIndex == null ? item?.id! : null,
@@ -228,14 +240,16 @@ async function save({ imageUrl, flowId }: { imageUrl: string; flowId: number }) 
   if (!imageUrl) return;
 
   const { id, insertAfterIndex } = currentRowStoryboardInfo.value;
-  const previewUrl = buildTencentCosPreviewUrl(imageUrl, { width: 480, format: "webp" });
+  const version = Date.now();
+  const previewUrl = getVersionedPreviewImageSrc(undefined, imageUrl, { width: 480, format: "webp" }, version);
+  const versionedImageUrl = appendCacheBust(imageUrl, version);
 
   // 插入模式：在两张图之间新增一条分镜
   if (id === null && insertAfterIndex !== null) {
     const newFrame: Storyboard = {
       duration: 0,
       prompt: "",
-      src: imageUrl,
+      src: versionedImageUrl,
       thumbSrc: previewUrl,
       videoDesc: "",
       shouldGenerateImage: 1,
@@ -256,7 +270,7 @@ async function save({ imageUrl, flowId }: { imageUrl: string; flowId: number }) 
   // 更新模式：更新对应分镜的 src
   const target = storyboard.value.find((s) => s.id === id);
   if (target) {
-    target.src = imageUrl;
+    target.src = versionedImageUrl;
     target.thumbSrc = previewUrl;
     target.state = "已完成";
     target.flowId = flowId;

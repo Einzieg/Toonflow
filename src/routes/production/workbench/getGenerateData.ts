@@ -94,6 +94,8 @@ export default router.post(
         .leftJoin("o_assets", "o_assets2Storyboard.assetId", "o_assets.id")
         .leftJoin("o_image", "o_image.id", "o_assets.imageId")
         .whereIn("o_assets2Storyboard.storyboardId", storyIds as number[])
+        .orderBy("o_assets2Storyboard.storyboardId", "asc")
+        .orderBy("o_assets2Storyboard.rowid", "asc")
         .select("o_assets.*", "o_image.filePath", "o_assets2Storyboard.storyboardId");
 
       await Promise.all(

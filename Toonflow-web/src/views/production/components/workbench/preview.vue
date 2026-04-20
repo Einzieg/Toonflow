@@ -84,7 +84,7 @@
           </div>
           <div class="characterList">
             <div v-for="(char, index) in currentCharacters" :key="index" class="characterItem">
-              <t-image :src="char.avatar" fit="cover" class="characterAvatar" :style="{ width: '80px', height: '80px', borderRadius: '8px' }" />
+              <t-image :src="getCharacterAvatarSrc(char.avatar)" fit="cover" class="characterAvatar" :style="{ width: '80px', height: '80px', borderRadius: '8px' }" />
               <t-tag>
                 {{ char.name }}（{{
                   char.type == "role"
@@ -153,7 +153,7 @@
               @click="selectShot(index)">
               <t-checkbox v-model="shot.selected" class="shotCheckbox" @click.stop @mousedown.stop />
               <div class="shotImageWrapper">
-                <img v-if="shot.filePath" :src="shot.filePath" :alt="shot.description" class="shotImage" />
+                <img v-if="shot.filePath" :src="getShotThumbSrc(shot.filePath)" :alt="shot.description" class="shotImage" loading="lazy" decoding="async" />
                 <div v-else class="shotPlaceholder">
                   <i-pic theme="outline" size="24" fill="#999" />
                 </div>
@@ -174,6 +174,7 @@ import { VueDraggable } from "vue-draggable-plus";
 import { DialogPlugin } from "tdesign-vue-next";
 import axios from "@/utils/axios";
 import JSZip from "jszip";
+import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
 
 interface ShotCharacter {
   name: string;
@@ -199,6 +200,15 @@ interface Shot {
   selected?: boolean;
   characters?: ShotCharacter[];
 }
+
+function getShotThumbSrc(src?: string) {
+  return getPreviewImageSrc(undefined, src, { width: 320, format: "webp" });
+}
+
+function getCharacterAvatarSrc(src?: string) {
+  return getPreviewImageSrc(undefined, src, { width: 160, height: 160, format: "webp" });
+}
+
 const episodesId = inject<Ref<number>>("episodesId");
 
 // 模拟分镜数据

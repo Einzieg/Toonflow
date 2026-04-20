@@ -8,7 +8,7 @@
     <div class="posterGrid">
       <div v-for="(item, index) in poster?.items" :key="item.id" class="posterCard">
         <div class="posterImage">
-          <t-image v-if="item.image" :src="item.image" fit="cover" class="posterImg">
+          <t-image v-if="item.image" :src="getPosterPreviewSrc(item.image)" fit="cover" class="posterImg">
             <template #overlayContent>
               <div class="imageToolsWrap">
                 <ImageTools :src="item.image" position="br" />
@@ -23,6 +23,7 @@
 
 <script setup lang="ts">
 import { Handle, Position } from "@vue-flow/core";
+import { getPreviewImageSrc } from "../utils/imagePreview";
 
 interface PosterItem {
   id: number;
@@ -37,6 +38,10 @@ const props = defineProps<{
 }>();
 
 const poster = defineModel<{ items: PosterItem[] }>({ required: true });
+
+function getPosterPreviewSrc(src?: string) {
+  return getPreviewImageSrc(undefined, src, { width: 400, format: "webp" });
+}
 </script>
 
 <style lang="scss" scoped>

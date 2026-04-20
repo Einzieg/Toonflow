@@ -45,7 +45,7 @@
                   <t-image-viewer :images="[row.src]" :closeOnEscKeydown="true" :closeOnOverlay="true">
                     <template #trigger="{ open }">
                       <div class="mediaTrigger" @click="row.src && open()">
-                        <img :src="row.src" :alt="row.name" />
+                        <img :src="getStoryboardThumb(row.src)" :alt="row.name" loading="lazy" decoding="async" />
                         <div class="mediaHoverOverlay">
                           <t-icon name="browse" size="20px" />
                           <span class="hoverText">{{ $t("components.storyboardImageCheck.preview") }}</span>
@@ -71,6 +71,7 @@ import dayjs from "dayjs";
 import axios from "@/utils/axios";
 import type { TableProps } from "tdesign-vue-next";
 import type { Storyboard } from "@/views/production/utils/flowBuilder";
+import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
 const props = withDefaults(
   defineProps<{
     /** 限制显示的资产类型 */
@@ -172,6 +173,10 @@ const clipColumns: TableProps["columns"] = [
     cell: "createTime",
   },
 ];
+
+function getStoryboardThumb(src?: string) {
+  return getPreviewImageSrc(undefined, src, { width: 240, format: "webp" });
+}
 
 function handleSearch() {
   pagination.value.page = 1;

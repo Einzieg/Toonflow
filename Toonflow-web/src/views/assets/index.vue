@@ -95,7 +95,7 @@
                           <t-image-viewer v-else :images="[subRow.src]" :closeOnEscKeydown="true" :closeOnOverlay="true">
                             <template #trigger="{ open }">
                               <div class="imageTrigger" @click="subRow.src && open()">
-                                <img v-if="subRow.src" :src="subRow.src" :alt="subRow.name" class="previewImage" />
+                                <img v-if="subRow.src" :src="getAssetThumbSrc(subRow.src)" :alt="subRow.name" class="previewImage" loading="lazy" decoding="async" />
                                 <div v-else class="noImage">
                                   <t-icon name="image" size="24px" />
                                 </div>
@@ -144,7 +144,7 @@
                     <t-image-viewer :images="[row.src]" :closeOnEscKeydown="true" :closeOnOverlay="true">
                       <template #trigger="{ open }">
                         <div class="imageTrigger" @click="row.src && open()">
-                          <img v-if="row.src" :src="row.src" :alt="row.name" class="previewImage" />
+                          <img v-if="row.src" :src="getAssetThumbSrc(row.src)" :alt="row.name" class="previewImage" loading="lazy" decoding="async" />
                           <div v-else class="noImage">
                             <t-icon name="image" size="24px" />
                           </div>
@@ -172,7 +172,7 @@
                     <t-image-viewer v-else :images="[row.src]" :closeOnEscKeydown="true" :closeOnOverlay="true">
                       <template #trigger="{ open }">
                         <div class="imageTrigger" @click="row.src && open()">
-                          <img v-if="row.src" :src="row.src" :alt="row.name" class="previewImage" />
+                          <img v-if="row.src" :src="getAssetThumbSrc(row.src)" :alt="row.name" class="previewImage" loading="lazy" decoding="async" />
                           <div v-else class="noImage">
                             <t-icon name="image" size="24px" />
                           </div>
@@ -233,7 +233,7 @@
                     <t-image-viewer v-if="getMediaType(row.src) === 'image'" :images="[row.src]" :closeOnEscKeydown="true" :closeOnOverlay="true">
                       <template #trigger="{ open }">
                         <div class="mediaTrigger" @click="row.src && open()">
-                          <img :src="row.src" :alt="row.name" />
+                          <img :src="getAssetThumbSrc(row.src)" :alt="row.name" loading="lazy" decoding="async" />
                           <div class="mediaHoverOverlay">
                             <t-icon name="browse" size="20px" />
                             <span class="hoverText">{{ $t("workbench.assets.preview") }}</span>
@@ -442,6 +442,7 @@ import addAudioAssets from "./components/addAudioAssets.vue";
 import generateImage from "./components/generateImage.vue";
 import projectStore from "@/stores/project";
 import settingStore from "@/stores/setting";
+import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
 const { otherSetting } = storeToRefs(settingStore());
 
 const props = withDefaults(
@@ -544,6 +545,11 @@ interface Asset {
   promptState: string;
   filePath: string;
 }
+
+function getAssetThumbSrc(src?: string) {
+  return getPreviewImageSrc(undefined, src, { width: 240, height: 240, format: "webp" });
+}
+
 const tableData = ref<Asset[]>([]);
 // 分页配置
 const pagination = ref({

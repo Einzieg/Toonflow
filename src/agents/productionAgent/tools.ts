@@ -29,6 +29,10 @@ const storyboardSchema = z.object({
   associateAssetsIds: z.array(z.number()).describe("关联资产ID列表"),
   src: z.string().nullable().describe("分镜资源路径"),
   index: z.number().nullable().optional().describe("分镜排序字段"),
+  state: z.enum(["未生成", "生成中", "已完成", "生成失败"]).optional().describe("分镜图片生成状态"),
+  shouldGenerateImage: z.number().optional().describe("是否需要生成分镜图，1为需要"),
+  track: z.string().nullable().optional().describe("分镜所属轨道分组"),
+  videoDesc: z.string().optional().describe("分镜画面描述"),
 });
 const workbenchDataSchema = z.object({
   name: z.string().describe("项目名称"),
@@ -66,6 +70,27 @@ interface ToolConfig {
 export default (toolCpnfig: ToolConfig) => {
   const { resTool, toolsNames, msg } = toolCpnfig;
   const { socket } = resTool;
+  const storyboardGenerateInputSchema = z.object({
+    ids: z.array(z.number()).describe("必须获取真实的分镜ID，支持批量生成"),
+  });
+  const executeGenerateStoryboard = async ({ ids }: { ids: number[] }) => {
+    const uniqueIds = _.uniq(ids.filter((id) => Number.isInteger(id)));
+    if (!uniqueIds.length) return "没有可生成的分镜";
+    const thinking = msg.thinking("正在生成分镜...");
+    new Promise((resolve) => socket.emit("generateStoryboard", { ids: uniqueIds }, (res: any) => resolve(res)))
+      .then((res) => {
+        thinking.appendText("生成的分镜数据:\n" + JSON.stringify(res, null, 2));
+        thinking.updateTitle("分镜生成完成");
+        thinking.complete();
+      })
+      .catch((e) => {
+        thinking.appendText("分镜生成失败:\n" + u.error(e).message);
+        thinking.updateTitle("分镜生成失败");
+        thinking.complete();
+      });
+
+    return "开始生成分镜";
+  };
   const tools: Record<string, Tool> = {
     get_flowData: tool({
       description: "获取工作区数据",
@@ -168,25 +193,13 @@ export default (toolCpnfig: ToolConfig) => {
     }),
     generate_storyboard: tool({
       description: "生成分镜图片",
-      inputSchema: z.object({
-        ids: z.array(z.number()).describe("必须获取真实的分镜ID，支持批量生成"),
-      }),
-      execute: async ({ ids }) => {
-        const thinking = msg.thinking("正在生成分镜...");
-        new Promise((resolve) => socket.emit("generateStoryboard", { ids }, (res: any) => resolve(res)))
-          .then((res) => {
-            thinking.appendText("生成的分镜数据:\n" + JSON.stringify(res, null, 2));
-            thinking.updateTitle("分镜生成完成");
-            thinking.complete();
-          })
-          .catch((e) => {
-            thinking.appendText("分镜生成失败:\n" + u.error(e).message);
-            thinking.updateTitle("分镜生成失败");
-            thinking.complete();
-          });
-
-        return "开始生成分镜";
-      },
+      inputSchema: storyboardGenerateInputSchema,
+      execute: executeGenerateStoryboard,
+    }),
+    generate_storyboard_images: tool({
+      description: "生成分镜图片（兼容旧技能名）",
+      inputSchema: storyboardGenerateInputSchema,
+      execute: executeGenerateStoryboard,
     }),
   };
 

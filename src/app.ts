@@ -12,6 +12,7 @@ import fs from "fs";
 import u from "@/utils";
 import jwt from "jsonwebtoken";
 import socketInit from "@/socket/index";
+import sharp from "sharp";
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +38,54 @@ export default async function startServe(randomPort: Boolean = false) {
   }
   console.log("文件目录:", ossDir);
   app.use("/oss", express.static(ossDir, { acceptRanges: false }));
+  app.get(/^\/oss-preview\/(.+)$/, async (req, res) => {
+    try {
+      const encodedPath = String(req.params[0] || "");
+      const relativePath = decodeURIComponent(encodedPath);
+      if (!/\.(jpe?g|png|webp|bmp|gif)$/i.test(relativePath)) {
+        return res.status(404).end();
+      }
+
+      const absolutePath = u.oss.resolveLocalAbsolutePath(relativePath);
+      if (!fs.existsSync(absolutePath)) {
+        return res.status(404).end();
+      }
+
+      const width = Math.min(4096, Math.max(0, Number.parseInt(String(req.query.w || ""), 10) || 0));
+      const height = Math.min(4096, Math.max(0, Number.parseInt(String(req.query.h || ""), 10) || 0));
+      const format = ["webp", "jpeg", "png"].includes(String(req.query.format || "")) ? String(req.query.format) : "webp";
+      const transformer = sharp(absolutePath, { failOn: "none" }).rotate();
+
+      if (width > 0 || height > 0) {
+        transformer.resize({
+          width: width || undefined,
+          height: height || undefined,
+          fit: "inside",
+          withoutEnlargement: true,
+        });
+      }
+
+      if (format === "jpeg") {
+        transformer.jpeg({ quality: 82, mozjpeg: true });
+        res.type("image/jpeg");
+      } else if (format === "png") {
+        transformer.png({ compressionLevel: 9 });
+        res.type("image/png");
+      } else {
+        transformer.webp({ quality: 82, effort: 4 });
+        res.type("image/webp");
+      }
+
+      res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
+      res.end(await transformer.toBuffer());
+    } catch (error: any) {
+      if (error?.message?.includes("不在 OSS 根目录内")) {
+        return res.status(403).end();
+      }
+      console.error("[oss-preview]", error);
+      return res.status(500).end();
+    }
+  });
   // skills 静态资源
   const skillsDir = u.getPath("skills");
   if (!fs.existsSync(skillsDir)) {

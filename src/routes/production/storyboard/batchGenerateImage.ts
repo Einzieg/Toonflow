@@ -56,6 +56,8 @@ export default router.post(
       .db("o_assets")
       .leftJoin("o_assets2Storyboard", "o_assets.id", "o_assets2Storyboard.assetId")
       .whereIn("o_assets2Storyboard.storyboardId", finalStoryboardIds)
+      .orderBy("o_assets2Storyboard.storyboardId", "asc")
+      .orderBy("o_assets2Storyboard.rowid", "asc")
       .select("o_assets2Storyboard.storyboardId", "o_assets.imageId");
 
     const assetRecord: Record<number, number[]> = {};

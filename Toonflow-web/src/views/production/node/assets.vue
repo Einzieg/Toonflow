@@ -91,7 +91,7 @@
 import { defineAsyncComponent } from "vue";
 import { Handle, Position } from "@vue-flow/core";
 import { type AssetItem, type DeriveAsset } from "../utils/flowBuilder";
-import { buildTencentCosPreviewUrl, getPreviewImageSrc } from "../utils/imagePreview";
+import { getPreviewImageSrc } from "../utils/imagePreview";
 import axios from "@/utils/axios";
 import useProjectStore from "@/stores/project";
 const { project } = storeToRefs(useProjectStore());
@@ -135,7 +135,7 @@ function generateAssetsImage(row: DeriveAsset, referanceImageUrl?: string) {
 async function save({ imageUrl, flowId }: { imageUrl: string; flowId: number }) {
   // 更新对应分镜的 src
   if (!imageUrl) return;
-  const previewUrl = buildTencentCosPreviewUrl(imageUrl, { width: 480, format: "webp" });
+  const previewUrl = getPreviewImageSrc(undefined, imageUrl, { width: 480, format: "webp" });
   for (const i of assets.value) {
     const target = i.derive.find((s) => s.id === currentAssetsId.value);
     if (target) {

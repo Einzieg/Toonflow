@@ -64,7 +64,7 @@ const { project } = storeToRefs(projectStore());
 const episodesId = inject<Ref<number>>("episodesId")!;
 const activeTrackIndex = ref(0);
 const cacheStore = imageListCacheStore();
-const { getCache, setCache, removeCache, initCacheFromTrackList, warmUpUrls } = cacheStore;
+const { getCache, setCache, removeCache, syncCacheFromTrackList, warmUpUrls } = cacheStore;
 const { urlMap } = storeToRefs(cacheStore);
 
 const modeOptions = ref<VideoModel>({
@@ -266,8 +266,8 @@ async function getGenerateData() {
   const pid = project.value?.id;
   const sid = episodesId.value;
   if (pid != null && sid != null) {
-    // 先将没有缓存的轨道写入缓存（保留已有本地编辑）
-    initCacheFromTrackList(pid, sid, data.trackList);
+    // 同步脚本级缓存，删除已不存在轨道的旧缓存，并为新增轨道建立缓存。
+    syncCacheFromTrackList(pid, sid, data.trackList);
     // 批量向后端请求文件路径对应的完整 URL
     await warmUpUrls(pid, sid);
     // 将本地缓存回写到 trackList，确保优先使用缓存数据（src 已解析为完整 URL）

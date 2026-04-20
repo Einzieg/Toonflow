@@ -3,9 +3,14 @@ import projectStore from "@/stores/project";
 import settingStore from "@/stores/setting";
 import { useChat } from "@/utils/useChat";
 import type { FlowData, Storyboard } from "@/views/production/utils/flowBuilder";
-import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
+import { appendCacheBust, getVersionedPreviewImageSrc } from "@/views/production/utils/imagePreview";
 import type { ChatMessagesData } from "@tdesign-vue-next/chat";
 import { useThrottleFn } from "@vueuse/core";
+
+function applyImageState(target: { src?: string | null; thumbSrc?: string | null }, src?: string | null, thumbSrc?: string | null, version = Date.now()) {
+  target.src = src ? appendCacheBust(src, version) : null;
+  target.thumbSrc = src || thumbSrc ? getVersionedPreviewImageSrc(thumbSrc, src, { width: 480, format: "webp" }, version) : null;
+}
 
 function makeProductionAgentStore(projectId: string) {
   return defineStore(`productionAgent-${projectId}`, () => {
@@ -93,18 +98,23 @@ function makeProductionAgentStore(projectId: string) {
                 videoDesc: videoDesc,
                 shouldGenerateImage: shouldGenerateImage,
               });
-              await addStoryboardInfo([
-                {
-                  prompt: prompt || "",
-                  duration: Number(duration) || 0,
-                  track: track || "",
-                  state: "未生成" as "未生成" | "生成中" | "已完成" | "生成失败",
-                  src: null,
-                  videoDesc,
-                  shouldGenerateImage,
-                  associateAssetsIds: JSON.parse(attrs.associateAssetsIds) || [],
-                },
-              ]);
+              try {
+                await addStoryboardInfo([
+                  {
+                    prompt: prompt || "",
+                    duration: Number(duration) || 0,
+                    track: track || "",
+                    state: "未生成" as "未生成" | "生成中" | "已完成" | "生成失败",
+                    src: null,
+                    videoDesc,
+                    shouldGenerateImage,
+                    associateAssetsIds: JSON.parse(attrs.associateAssetsIds) || [],
+                  },
+                ]);
+              } catch (e) {
+                console.error("[storyboard.addStoryboardInfo] sync failed", e);
+                await getFlowData();
+              }
             }
           }
         }
@@ -131,7 +141,10 @@ function makeProductionAgentStore(projectId: string) {
           s.on("connect", () => {
             getHistory();
           });
-          s.on("getFlowData", (_, callback) => {
+          s.on("getFlowData", async ({ key }, callback) => {
+            if (key === "storyboard" && flowData.value.storyboard.some((item) => item.shouldGenerateImage && !item.id)) {
+              await getFlowData();
+            }
             const returnData = JSON.parse(JSON.stringify(flowData.value));
             returnData.assets.forEach((item: any) => {
               delete item.prompt;
@@ -215,15 +228,20 @@ function makeProductionAgentStore(projectId: string) {
       flowData.value = data;
     }
     async function batchGenerateStoryboard(allIds: number[]) {
+      const uniqueIds = Array.from(new Set(allIds.filter((id): id is number => Number.isInteger(id))));
+      if (!uniqueIds.length) return [];
       flowData.value.storyboard.forEach((item) => {
-        if (allIds.includes(item.id!)) {
+        if (item.id && uniqueIds.includes(item.id)) {
           item.state = "生成中" as "未生成" | "生成中" | "已完成" | "生成失败";
+          item.src = null;
+          item.thumbSrc = null;
+          item.reason = "";
         }
       });
       const { data } = await axios.post("/production/storyboard/batchGenerateImage", {
         scriptId: episodesId.value,
         projectId: projectId,
-        storyboardIds: allIds,
+        storyboardIds: uniqueIds,
         concurrentCount: settingStore().otherSetting.assetsBatchGenereateSize,
       });
         if (data) {
@@ -235,8 +253,13 @@ function makeProductionAgentStore(projectId: string) {
               const findData = data.find((i: any) => i.id == item.id);
               if (findData) {
                 item.state = findData.state;
-                item.src = findData.src;
-                item.thumbSrc = getPreviewImageSrc(findData.thumbSrc, findData.src ?? item.src, { width: 480, format: "webp" });
+                if (findData.src || findData.thumbSrc) {
+                  applyImageState(item, findData.src, findData.thumbSrc);
+                } else if (findData.state === "生成中") {
+                  item.src = null;
+                  item.thumbSrc = null;
+                }
+                item.reason = findData.reason ?? item.reason ?? "";
               }
             });
           }
@@ -267,8 +290,7 @@ function makeProductionAgentStore(projectId: string) {
                 asset.derive.forEach((derive) => {
                   if (derive.id === record.id) {
                     derive.state = record.state;
-                    derive.src = record.src;
-                    derive.thumbSrc = getPreviewImageSrc(record.thumbSrc, record.src ?? derive.src, { width: 480, format: "webp" });
+                    applyImageState(derive, record.src, record.thumbSrc);
                   }
                 });
               }
@@ -320,8 +342,9 @@ function makeProductionAgentStore(projectId: string) {
             asset.derive.forEach((derive) => {
               if (derive.id === record.id) {
                 derive.state = record.state as "未生成" | "生成中" | "已完成" | "生成失败";
-                if (record.src) derive.src = record.src;
-                derive.thumbSrc = getPreviewImageSrc(record.thumbSrc, record.src ?? derive.src, { width: 480, format: "webp" });
+                if (record.src || record.thumbSrc) {
+                  applyImageState(derive, record.src, record.thumbSrc);
+                }
                 derive.errorReason = record?.errorReason ?? "";
                 derive.prompt = record?.prompt ?? "";
               }
@@ -384,8 +407,9 @@ function makeProductionAgentStore(projectId: string) {
           const item = flowData.value.storyboard.find((s) => s.id === record.id);
           if (item) {
             item.state = record.state as "未生成" | "生成中" | "已完成" | "生成失败";
-            if (record.src) item.src = record.src;
-            item.thumbSrc = getPreviewImageSrc(record.thumbSrc, record.src ?? item.src, { width: 480, format: "webp" });
+            if (record.src || record.thumbSrc) {
+              applyImageState(item, record.src, record.thumbSrc);
+            }
             item.reason = record?.reason ?? "";
           }
         });
@@ -449,8 +473,7 @@ function makeProductionAgentStore(projectId: string) {
         if (updated) {
           item.id = updated.id;
           item.trackId = updated.trackId;
-          item.src = updated.src;
-          item.thumbSrc = getPreviewImageSrc(updated.thumbSrc, updated.src ?? item.src, { width: 480, format: "webp" });
+          applyImageState(item, updated.src, updated.thumbSrc);
           item.state = updated.state;
           item.associateAssetsIds = updated.associateAssetsIds;
         }
