@@ -1,30 +1,59 @@
-.codex
-.codex/
+.devtools
+# dependencies (bun install)
+node_modules
+.vscode
+# output
+out
+dist
+*.tgz
 
-# Build output
-build/
+# code coverage
+coverage
+*.lcov
 
-# Runtime data and generated artifacts
-data/
-*.db
-*.sqlite
-*.sqlite3
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
-# Frontend workspace local artifacts
-Toonflow-web/.git.embedded-backup/
-Toonflow-web/node_modules/
-Toonflow-web/dist/
-Toonflow-web/dist-ssr/
-Toonflow-web/coverage/
-Toonflow-web/oss/
-Toonflow-web/backup/
-
-# Dependencies and logs
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Environment files
+# dotenv environment variable files
 .env
-.env.*
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+build/*
+
+data/serve/
+
+upload/*
+uploads/*
+
+db.sqlite
+db.sqlite-shm
+db.sqlite-wal
+
+web/*
+
+*.sqlite
+
+router.ts
+
+database.d.ts
+
+.devtools
+data/oss/*
+data/test.sqlite
+version.txt

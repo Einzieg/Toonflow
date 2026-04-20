@@ -2,26 +2,7 @@ import isPathInside from "is-path-inside";
 import getPath, { isEletron } from "@/utils/getPath";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
-
-const nodeRequire = createRequire(__filename);
-
-type OssProvider = "local" | "tencent-cos";
-
-type CosClient = {
-  putObject(options: Record<string, any>, callback: (err: any, data: any) => void): void;
-  deleteObject(options: Record<string, any>, callback: (err: any, data: any) => void): void;
-};
-
-type CosUploadConfig = {
-  bucket: string;
-  region: string;
-  secretId: string;
-  secretKey: string;
-  pathPrefix: string;
-  publicBaseUrl: string;
-  objectAcl: string;
-};
+import sharp from "sharp";
 
 function normalizeBaseUrl(value?: string | null): string {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -29,12 +10,19 @@ function normalizeBaseUrl(value?: string | null): string {
 
 // 规范化路径：去除前导斜杠，并将路径分隔符统一转换为系统分隔符
 function normalizeUserPath(userPath: string): string {
+  // 去除前导的 / 或 \
   const trimmedPath = userPath.replace(/^[/\\]+/, "");
+  // 将所有 / 替换为系统路径分隔符（path.sep）
+  // 这样在 Windows 上会转为 \，在 Unix 上保持 /
   return trimmedPath.split("/").join(path.sep);
 }
 
 function normalizePosixPath(userPath: string): string {
-  return userPath.replace(/^[/\\]+/, "").split(path.sep).join("/").replace(/\/{2,}/g, "/");
+  return String(userPath || "")
+    .replace(/^[/\\]+/, "")
+    .split(path.sep)
+    .join("/")
+    .replace(/\/{2,}/g, "/");
 }
 
 function joinUrl(baseUrl: string, pathname: string): string {
@@ -66,18 +54,11 @@ function resolveSafeLocalPath(userPath: string, rootDir: string): string {
 class OSS {
   private rootDir: string;
   private initPromise: Promise<void>;
-  private cosClientPromise?: Promise<CosClient | null>;
-  private warningCache = new Set<string>();
 
   constructor() {
     this.rootDir = getPath("oss");
+    // 初始化时自动创建根目录
     this.initPromise = fs.mkdir(this.rootDir, { recursive: true }).then(() => {});
-  }
-
-  private warnOnce(message: string) {
-    if (this.warningCache.has(message)) return;
-    this.warningCache.add(message);
-    console.warn(`[OSS] ${message}`);
   }
 
   /**
@@ -93,24 +74,8 @@ class OSS {
     return `/${prefix}/${safePath.split(path.sep).join("/")}`;
   }
 
-  private normalizeStoredRelativePath(userRelPath: string, prefix?: string): string {
-    const normalizedPath = normalizePosixPath(userRelPath);
-    if (this.getProvider() !== "tencent-cos") return normalizedPath;
-    if (prefix && prefix !== "oss") return normalizedPath;
-
-    const pathPrefix = this.getCosPathPrefix();
-    if (!pathPrefix) return normalizedPath;
-
-    let nextPath = normalizedPath;
-    while (nextPath === pathPrefix || nextPath.startsWith(`${pathPrefix}/`)) {
-      nextPath = nextPath === pathPrefix ? "" : nextPath.slice(pathPrefix.length + 1);
-    }
-    return nextPath;
-  }
-
   private resolvePathInput(
     userRelPath: string,
-    prefix?: string,
   ): {
     relativePath: string;
     passthroughUrl: string | null;
@@ -122,204 +87,18 @@ class OSS {
 
     const localPath = this.getLocalPathFromPublicUrl(rawPath);
     if (localPath !== null) {
-      return {
-        relativePath: this.normalizeStoredRelativePath(localPath, prefix),
-        passthroughUrl: null,
-      };
+      return { relativePath: normalizePosixPath(localPath), passthroughUrl: null };
     }
 
     if (/^https?:\/\//i.test(rawPath)) {
       return { relativePath: "", passthroughUrl: rawPath };
     }
 
-    return {
-      relativePath: this.normalizeStoredRelativePath(rawPath, prefix),
-      passthroughUrl: null,
-    };
-  }
-
-  private getProvider(): OssProvider {
-    return process.env.OSS_PROVIDER === "tencent-cos" ? "tencent-cos" : "local";
+    return { relativePath: normalizePosixPath(rawPath), passthroughUrl: null };
   }
 
   private getStaticBaseUrl(): string {
-    return normalizeBaseUrl(process.env.OSS_PUBLIC_BASE_URL || process.env.OSSURL);
-  }
-
-  private getCosPublicBaseUrl(): string {
-    return normalizeBaseUrl(process.env.OSS_COS_PUBLIC_BASE_URL);
-  }
-
-  private getCosPathPrefix(): string {
-    return normalizePosixPath(process.env.OSS_COS_PATH_PREFIX || "");
-  }
-
-  private getCosUploadConfig(): CosUploadConfig | null {
-    if (this.getProvider() !== "tencent-cos") {
-      return null;
-    }
-
-    const bucket = String(process.env.OSS_COS_BUCKET || "").trim();
-    const region = String(process.env.OSS_COS_REGION || "").trim();
-    const secretId = String(process.env.OSS_COS_SECRET_ID || "").trim();
-    const secretKey = String(process.env.OSS_COS_SECRET_KEY || "").trim();
-
-    if (!bucket || !region || !secretId || !secretKey) {
-      this.warnOnce("检测到 OSS_PROVIDER=tencent-cos，但 OSS_COS_BUCKET / OSS_COS_REGION / OSS_COS_SECRET_ID / OSS_COS_SECRET_KEY 未完整配置，已回退到本地 OSS。");
-      return null;
-    }
-
-    return {
-      bucket,
-      region,
-      secretId,
-      secretKey,
-      pathPrefix: this.getCosPathPrefix(),
-      publicBaseUrl: this.getCosPublicBaseUrl(),
-      objectAcl: String(process.env.OSS_COS_OBJECT_ACL || "").trim(),
-    };
-  }
-
-  private async getCosClient(): Promise<CosClient | null> {
-    const config = this.getCosUploadConfig();
-    if (!config) return null;
-
-    if (!this.cosClientPromise) {
-      this.cosClientPromise = Promise.resolve()
-        .then(() => {
-          try {
-            const COS = nodeRequire("cos-nodejs-sdk-v5");
-            const CosCtor = COS?.default || COS;
-            return new CosCtor({
-              SecretId: config.secretId,
-              SecretKey: config.secretKey,
-            }) as CosClient;
-          } catch (error) {
-            this.warnOnce("未安装 cos-nodejs-sdk-v5，已回退到本地 OSS。请重新安装依赖后再启用腾讯云 COS。");
-            return null;
-          }
-        })
-        .catch(() => null);
-    }
-
-    return this.cosClientPromise;
-  }
-
-  private buildCosObjectKey(userRelPath: string): string {
-    const normalizedPath = this.normalizeStoredRelativePath(userRelPath, "oss");
-    const pathPrefix = this.getCosPathPrefix();
-    return pathPrefix ? `${pathPrefix}/${normalizedPath}` : normalizedPath;
-  }
-
-  private stripCosObjectKeyPrefix(objectKey: string): string | null {
-    const normalizedKey = normalizePosixPath(objectKey);
-    const pathPrefix = this.getCosPathPrefix();
-    if (!pathPrefix) return normalizedKey;
-
-    let strippedKey = normalizedKey;
-    let matched = false;
-    while (strippedKey === pathPrefix || strippedKey.startsWith(`${pathPrefix}/`)) {
-      matched = true;
-      strippedKey = strippedKey === pathPrefix ? "" : strippedKey.slice(pathPrefix.length + 1);
-    }
-
-    if (!matched) return null;
-    return strippedKey;
-  }
-
-  private guessMimeType(userRelPath: string): string | undefined {
-    const ext = path.extname(userRelPath).toLowerCase();
-    const mimeTypes: Record<string, string> = {
-      ".jpg": "image/jpeg",
-      ".jpeg": "image/jpeg",
-      ".png": "image/png",
-      ".gif": "image/gif",
-      ".webp": "image/webp",
-      ".bmp": "image/bmp",
-      ".svg": "image/svg+xml",
-      ".ico": "image/x-icon",
-      ".tiff": "image/tiff",
-      ".tif": "image/tiff",
-      ".mp4": "video/mp4",
-      ".mp3": "audio/mpeg",
-      ".wav": "audio/wav",
-      ".webm": "video/webm",
-    };
-    return mimeTypes[ext];
-  }
-
-  private async uploadRemoteFile(userRelPath: string, buffer: Buffer): Promise<void> {
-    const cosClient = await this.getCosClient();
-    const config = this.getCosUploadConfig();
-    if (!cosClient || !config) return;
-
-    const params: Record<string, any> = {
-      Bucket: config.bucket,
-      Region: config.region,
-      Key: this.buildCosObjectKey(userRelPath),
-      Body: buffer,
-      ContentLength: buffer.length,
-    };
-
-    const contentType = this.guessMimeType(userRelPath);
-    if (contentType) {
-      params.ContentType = contentType;
-    }
-    if (config.objectAcl) {
-      params.ACL = config.objectAcl;
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      cosClient.putObject(params, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  }
-
-  private async deleteRemoteFile(userRelPath: string): Promise<void> {
-    const cosClient = await this.getCosClient();
-    const config = this.getCosUploadConfig();
-    if (!cosClient || !config) return;
-
-    await new Promise<void>((resolve, reject) => {
-      cosClient.deleteObject(
-        {
-          Bucket: config.bucket,
-          Region: config.region,
-          Key: this.buildCosObjectKey(userRelPath),
-        },
-        (err) => {
-          if (err) reject(err);
-          else resolve();
-        },
-      );
-    });
-  }
-
-  private async collectDirectoryFiles(absPath: string, relativeRoot: string): Promise<string[]> {
-    const entries = await fs.readdir(absPath, { withFileTypes: true });
-    const files: string[] = [];
-
-    for (const entry of entries) {
-      const absChildPath = path.join(absPath, entry.name);
-      const relChildPath = normalizePosixPath(path.join(relativeRoot, entry.name));
-      if (entry.isDirectory()) {
-        files.push(...(await this.collectDirectoryFiles(absChildPath, relChildPath)));
-      } else if (entry.isFile()) {
-        files.push(relChildPath);
-      }
-    }
-
-    return files;
-  }
-
-  private async getRemoteFileUrl(userRelPath: string, prefix: string): Promise<string | null> {
-    if (prefix !== "oss") return null;
-    const cosClient = await this.getCosClient();
-    const publicBaseUrl = this.getCosPublicBaseUrl();
-    if (!cosClient || !publicBaseUrl) return null;
-    return joinUrl(publicBaseUrl, this.buildCosObjectKey(userRelPath));
+    return normalizeBaseUrl(process.env.OSS_PUBLIC_BASE_URL || process.env.OSSURL || process.env.ossURL);
   }
 
   getInternalBaseUrl(): string {
@@ -334,31 +113,8 @@ class OSS {
   }
 
   buildImagePreviewUrl(publicUrl: string, options?: { width?: number; height?: number; format?: "webp" | "jpeg" | "png" }): string {
-    if (!publicUrl || !isProcessableImagePath(publicUrl)) {
+    if (!publicUrl || !isProcessableImagePath(publicUrl) || publicUrl.includes("/oss-preview/")) {
       return publicUrl;
-    }
-
-    if (publicUrl.includes("/oss-preview/")) {
-      return publicUrl;
-    }
-
-    const width = Math.max(0, Math.round(Number(options?.width || 0)));
-    const height = Math.max(0, Math.round(Number(options?.height || 0)));
-    const format = options?.format || "webp";
-
-    if (this.getProvider() === "tencent-cos") {
-      const cosBaseUrl = this.getCosPublicBaseUrl();
-      if (!cosBaseUrl || !publicUrl.startsWith(`${cosBaseUrl}/`)) {
-        return publicUrl;
-      }
-
-      const processSegments = ["imageView2", "1"];
-      if (width > 0) processSegments.push("w", String(width));
-      if (height > 0) processSegments.push("h", String(height));
-      if (format) processSegments.push("format", format);
-
-      const separator = publicUrl.includes("?") ? "&" : "?";
-      return `${publicUrl}${separator}${processSegments.join("/")}`;
     }
 
     const localPath = this.getLocalPathFromPublicUrl(publicUrl);
@@ -366,6 +122,9 @@ class OSS {
       return publicUrl;
     }
 
+    const width = Math.max(0, Math.round(Number(options?.width || 0)));
+    const height = Math.max(0, Math.round(Number(options?.height || 0)));
+    const format = options?.format || "webp";
     const searchParams = new URLSearchParams();
     if (width > 0) searchParams.set("w", String(width));
     if (height > 0) searchParams.set("h", String(height));
@@ -388,7 +147,7 @@ class OSS {
   }
 
   getLocalPathFromPublicUrl(url: string): string | null {
-    const normalizedUrl = url.split("?")[0].split("#")[0];
+    const normalizedUrl = String(url || "").split("?")[0].split("#")[0];
     const publicPrefix = "/oss/";
     if (normalizedUrl.startsWith(publicPrefix)) {
       return normalizedUrl.slice(publicPrefix.length);
@@ -407,42 +166,30 @@ class OSS {
       }
     }
 
-    const cosBaseUrl = this.getCosPublicBaseUrl();
-    if (cosBaseUrl && normalizedUrl.startsWith(`${cosBaseUrl}/`)) {
-      const objectKey = normalizedUrl.slice(cosBaseUrl.length + 1);
-      return this.stripCosObjectKeyPrefix(objectKey);
-    }
-
     return null;
   }
 
   /**
    * 获取指定相对路径文件的访问 URL。
    * @param userRelPath 用户传入的相对文件路径（使用 / 作为分隔符）
-   * @returns 文件的公开访问地址
+   * @returns 文件的 http 链接（本地服务地址）
    */
   async getFileUrl(userRelPath: string, prefix?: string): Promise<string> {
     if (!prefix) prefix = "oss";
     await this.ensureInit();
-    const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, prefix);
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
     if (passthroughUrl) {
       return passthroughUrl;
     }
 
-    const remoteUrl = await this.getRemoteFileUrl(normalizedPath, prefix);
-    if (remoteUrl) {
-      return remoteUrl;
-    }
-
+    const publicPath = this.buildPublicPath(relativePath, prefix);
     const staticBaseUrl = this.getStaticBaseUrl();
     if (staticBaseUrl) {
-      return joinUrl(staticBaseUrl, this.buildPublicPath(normalizedPath, prefix));
+      return joinUrl(staticBaseUrl, publicPath);
     }
-
-    if (isEletron()) {
-      return `${this.getInternalBaseUrl()}${this.buildPublicPath(normalizedPath, prefix)}`;
-    }
-    return this.buildPublicPath(normalizedPath, prefix);
+    if (process.env.NODE_ENV == "dev") return `http://localhost:10588${publicPath}`;
+    if (isEletron()) return `${this.getInternalBaseUrl()}${publicPath}`;
+    return publicPath;
   }
 
   /**
@@ -453,42 +200,62 @@ class OSS {
    */
   async getFile(userRelPath: string): Promise<Buffer> {
     await this.ensureInit();
-    const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, "oss");
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
     if (passthroughUrl) {
       throw new Error(`${userRelPath} 不是受支持的 OSS 路径`);
     }
-    return fs.readFile(resolveSafeLocalPath(normalizedPath, this.rootDir));
+    return fs.readFile(resolveSafeLocalPath(relativePath, this.rootDir));
   }
 
   /**
    * 读取图片文件并转换为 base64 编码的 Data URL。
    * @param userRelPath 用户传入的相对文件路径（使用 / 作为分隔符）
-   * @returns base64 编码的 Data URL
+   * @returns base64 编码的 Data URL (例如: data:image/png;base64,iVBORw0KGgo...)
    * @throws 路径不在 OSS 根目录内、文件不存在、不是图片文件等错误
    */
   async getImageBase64(userRelPath: string): Promise<string> {
     await this.ensureInit();
-    const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, "oss");
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
     if (passthroughUrl) {
       throw new Error(`${userRelPath} 不是受支持的 OSS 路径`);
     }
-    const absPath = resolveSafeLocalPath(normalizedPath, this.rootDir);
+    const absPath = resolveSafeLocalPath(relativePath, this.rootDir);
 
+    // 检查文件是否存在且为文件
     const stat = await fs.stat(absPath);
     if (!stat.isFile()) {
       throw new Error(`${userRelPath} 不是文件`);
     }
 
-    const mimeType = this.guessMimeType(normalizedPath);
+    // 获取文件扩展名并确定 MIME 类型
+    const ext = path.extname(relativePath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".bmp": "image/bmp",
+      ".svg": "image/svg+xml",
+      ".ico": "image/x-icon",
+      ".tiff": "image/tiff",
+      ".tif": "image/tiff",
+      ".mp4": "video/mp4",
+      ".mp3": "audio/mpeg",
+    };
+
+    const mimeType = mimeTypes[ext];
     if (!mimeType) {
-      throw new Error(`不支持的图片格式: ${path.extname(normalizedPath).toLowerCase()}`);
+      throw new Error(`不支持的图片格式: ${ext}。支持的格式: ${Object.keys(mimeTypes).join(", ")}`);
     }
 
+    // 读取文件并转换为 base64
     const data = await fs.readFile(absPath);
     const base64 = data.toString("base64");
+
+    // 返回完整的 Data URL
     return `data:${mimeType};base64,${base64}`;
   }
-
   /**
    * 删除指定路径的文件。
    * @param userRelPath 用户传入的相对文件路径（使用 / 作为分隔符）
@@ -496,12 +263,11 @@ class OSS {
    */
   async deleteFile(userRelPath: string): Promise<void> {
     await this.ensureInit();
-    const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, "oss");
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
     if (passthroughUrl) {
       throw new Error(`${userRelPath} 不是受支持的 OSS 路径`);
     }
-    await fs.unlink(resolveSafeLocalPath(normalizedPath, this.rootDir));
-    await this.deleteRemoteFile(normalizedPath);
+    await fs.unlink(resolveSafeLocalPath(relativePath, this.rootDir));
   }
 
   /**
@@ -511,24 +277,16 @@ class OSS {
    */
   async deleteDirectory(userRelPath: string): Promise<void> {
     await this.ensureInit();
-    const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, "oss");
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
     if (passthroughUrl) {
       throw new Error(`${userRelPath} 不是受支持的 OSS 路径`);
     }
-    const absPath = resolveSafeLocalPath(normalizedPath, this.rootDir);
+    const absPath = resolveSafeLocalPath(relativePath, this.rootDir);
     const stat = await fs.stat(absPath);
     if (!stat.isDirectory()) {
       throw new Error(`${userRelPath} 不是文件夹`);
     }
-
-    const remoteFiles = await this.collectDirectoryFiles(absPath, normalizePosixPath(normalizedPath));
     await fs.rm(absPath, { recursive: true, force: true });
-
-    const results = await Promise.allSettled(remoteFiles.map(async (filePath) => await this.deleteRemoteFile(filePath)));
-    const rejected = results.find((result) => result.status === "rejected");
-    if (rejected && rejected.status === "rejected") {
-      this.warnOnce(`删除 COS 远端文件时出现异常：${String(rejected.reason)}`);
-    }
   }
 
   /**
@@ -540,15 +298,16 @@ class OSS {
    */
   async writeFile(userRelPath: string, data: Buffer | string): Promise<void> {
     await this.ensureInit();
-    const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, "oss");
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
     if (passthroughUrl) {
       throw new Error(`${userRelPath} 不是受支持的 OSS 路径`);
     }
-    const absPath = resolveSafeLocalPath(normalizedPath, this.rootDir);
+    const absPath = resolveSafeLocalPath(relativePath, this.rootDir);
     await fs.mkdir(path.dirname(absPath), { recursive: true });
+    // 如果 data 是 string，则视为 base64 编码，先解码再写入
+    // 自动去除可能存在的 Data URL 前缀（如 "data:image/png;base64,"）
     const buffer = typeof data === "string" ? Buffer.from(data.replace(/^data:[^;]+;base64,/, ""), "base64") : data;
     await fs.writeFile(absPath, buffer);
-    await this.uploadRemoteFile(normalizedPath, buffer);
   }
 
   /**
@@ -559,14 +318,51 @@ class OSS {
   async fileExists(userRelPath: string): Promise<boolean> {
     await this.ensureInit();
     try {
-      const { relativePath: normalizedPath, passthroughUrl } = this.resolvePathInput(userRelPath, "oss");
+      const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
       if (passthroughUrl) {
         return false;
       }
-      const stat = await fs.stat(resolveSafeLocalPath(normalizedPath, this.rootDir));
+      const stat = await fs.stat(resolveSafeLocalPath(relativePath, this.rootDir));
       return stat.isFile();
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * 获取图片的缩略图 URL（最长边不超过 512px，等比缩放）。
+   * 缩略图保存在原路径同目录下的 smallImage 子文件夹中。
+   * 若缩略图已存在则直接返回其 URL；若不存在则同步生成并保存后返回缩略图 URL，
+   * 生成失败时返回原图 URL。
+   * @param userRelPath 用户传入的相对文件路径（使用 / 作为分隔符）
+   * @returns 缩略图 URL（已存在或生成成功）或原图 URL（生成失败时）
+   */
+  async getSmallImageUrl(userRelPath: string): Promise<string> {
+    // 构造缩略图相对路径：在原路径的目录层级前插入 smallImage 目录
+    // 例如：123/abc.jpg => smallImage/123/abc.jpg
+    const smallImageRelPath = `smallImage/${userRelPath.replace(/^[/\\]+/, "")}`;
+
+    if (await this.fileExists(smallImageRelPath)) {
+      return this.getFileUrl(smallImageRelPath);
+    }
+
+    // 缩略图不存在：同步生成，生成失败则返回原图 URL
+    const originalUrl = await this.getFileUrl(userRelPath);
+
+    try {
+      await this.ensureInit();
+      const srcAbsPath = resolveSafeLocalPath(userRelPath, this.rootDir);
+      const dstAbsPath = resolveSafeLocalPath(smallImageRelPath, this.rootDir);
+      await fs.mkdir(path.dirname(dstAbsPath), { recursive: true });
+      await sharp(srcAbsPath)
+        .resize(512, 512, { fit: "inside", withoutEnlargement: true })
+        .toFile(dstAbsPath);
+      console.info(`[${dstAbsPath}]小图写入成功`);
+      return this.getFileUrl(smallImageRelPath);
+    } catch (e) {
+      // 生成失败返回原图
+      console.warn("[OSS] 生成缩略图失败:", e);
+      return originalUrl;
     }
   }
 }

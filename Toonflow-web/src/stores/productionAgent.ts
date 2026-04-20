@@ -12,6 +12,28 @@ function applyImageState(target: { src?: string | null; thumbSrc?: string | null
   target.thumbSrc = src || thumbSrc ? getVersionedPreviewImageSrc(thumbSrc, src, { width: 480, format: "webp" }, version) : null;
 }
 
+function parseShouldGenerateImage(value: unknown) {
+  if (value == null || value === "") return 1;
+  if (typeof value === "boolean") return value ? 1 : 0;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["false", "0", "no", "n", "否", "不", "不生成", "skip"].includes(normalized)) return 0;
+  return 1;
+}
+
+function parseAssociateAssetsIds(value: unknown) {
+  if (Array.isArray(value)) return value.map(Number).filter((id) => Number.isInteger(id));
+  if (value == null || value === "") return [];
+
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(Number).filter((id) => Number.isInteger(id));
+  } catch {
+    return [];
+  }
+}
+
 function makeProductionAgentStore(projectId: string) {
   return defineStore(`productionAgent-${projectId}`, () => {
     const defMsg: ChatMessagesData[] = [
@@ -75,12 +97,9 @@ function makeProductionAgentStore(projectId: string) {
             const prompt = attrs.prompt ?? "";
             const duration = Number(attrs.duration) || 0;
             const track = attrs.track || "";
-            const shouldGenerateImage =
-              (typeof attrs.shouldGenerateImage == "boolean" && attrs.shouldGenerateImage) ||
-                String(attrs.shouldGenerateImage).toLowerCase() == "true"
-                ? 1
-                : 0;
+            const shouldGenerateImage = parseShouldGenerateImage(attrs.shouldGenerateImage);
             const videoDesc = attrs?.videoDesc ?? "";
+            const associateAssetsIds = parseAssociateAssetsIds(attrs.associateAssetsIds);
             const existingIndex = flowData.value.storyboard.findIndex(
               (s) => s.prompt == prompt && s.duration == duration && videoDesc == s.videoDesc,
             );
@@ -94,7 +113,7 @@ function makeProductionAgentStore(projectId: string) {
                 duration: Number(duration) || 0,
                 state: "未生成" as "未生成" | "生成中" | "已完成" | "生成失败",
                 src: null,
-                associateAssetsIds: JSON.parse(attrs.associateAssetsIds) || [],
+                associateAssetsIds,
                 videoDesc: videoDesc,
                 shouldGenerateImage: shouldGenerateImage,
               });
@@ -108,7 +127,7 @@ function makeProductionAgentStore(projectId: string) {
                     src: null,
                     videoDesc,
                     shouldGenerateImage,
-                    associateAssetsIds: JSON.parse(attrs.associateAssetsIds) || [],
+                    associateAssetsIds,
                   },
                 ]);
               } catch (e) {

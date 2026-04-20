@@ -13,10 +13,10 @@ export default router.post(
   }),
   async (req, res) => {
     const { id, prompt, duration } = req.body;
-    await u.db("o_videoTrack").where("id", id).update({
-      prompt,
-      duration,
-    });
+    const updateData: Record<string, string | number> = {};
+    if (prompt !== undefined) updateData.prompt = prompt;
+    if (duration !== undefined) updateData.duration = duration;
+    await u.db("o_videoTrack").where("id", id).update(updateData);
     res.status(200).send(success("更新成功"));
   },
 );

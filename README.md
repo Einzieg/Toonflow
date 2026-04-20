@@ -114,10 +114,10 @@ Toonflow 是面向短剧生产的 AI 工作台，围绕“策划 → 编剧 → 
 
 ## 📺 视频教程
 
-https://www.bilibili.com/video/BV1na6wB6Ea2
-[![Toonflow 8 分钟快速上手 AI 视频](./docs/videoCover.png)](https://www.bilibili.com/video/BV1oXD7BqEqJ)
+https://www.bilibili.com/video/BV1oXD7BqEqJ
+[![Toonflow 12 分钟快速上手 AI 视频](./docs/videoCover.jpg)](https://www.bilibili.com/video/BV1oXD7BqEqJ)
 
-**Toonflow 8 分钟快速上手 AI 视频**
+**Toonflow 12 分钟快速上手 AI 视频**
 👉 [点击观看](https://www.bilibili.com/video/BV1oXD7BqEqJ)
 
 📱 手机微信扫码观看
@@ -203,49 +203,7 @@ docker run -d -p <本地端口>:10588 -v <本地数据路径>:/app/data toonflow
 | ---------- | ---------------------------------- |
 | `NODE_ENV` | 运行环境，`prod` 表示生产环境      |
 | `PORT`     | 服务监听端口（默认 10588）         |
-| `OSSURL`   | 本地静态资源的公网访问前缀（兼容旧配置） |
-| `OSS_PUBLIC_BASE_URL` | 本地静态资源的公网访问前缀，效果同 `OSSURL` |
-
-**对象存储加速（推荐腾讯云 COS）**
-
-当服务器出口带宽较小、图片较大时，建议启用对象存储。当前版本支持：
-
-- 文件仍保留在本地 `/app/data/oss`
-- 写入时同步上传到腾讯云 COS
-- 对外返回 COS / CDN 地址，前端直接从对象存储加载图片
-- 服务端内部仍可优先读取本地文件，不影响现有 AI 处理链路
-
-启用 COS 需要配置以下环境变量：
-
-| 变量 | 说明 |
-| --- | --- |
-| `OSS_PROVIDER` | 设为 `tencent-cos` |
-| `OSS_COS_BUCKET` | COS Bucket 名称，例如 `example-1250000000` |
-| `OSS_COS_REGION` | COS 地域，例如 `ap-guangzhou` |
-| `OSS_COS_SECRET_ID` | 腾讯云 SecretId |
-| `OSS_COS_SECRET_KEY` | 腾讯云 SecretKey |
-| `OSS_COS_PUBLIC_BASE_URL` | 桶的公网访问域名或 CDN 域名，例如 `https://example-1250000000.cos.ap-guangzhou.myqcloud.com` |
-| `OSS_COS_PATH_PREFIX` | 可选，对象统一前缀，例如 `toonflow` |
-| `OSS_COS_OBJECT_ACL` | 可选，例如 `public-read` |
-
-> 建议直接给 `OSS_COS_PUBLIC_BASE_URL` 配 CDN 域名，而不是直接返回源站域名。
-
-如果你要迁移已经生成过的历史图片，还需要执行一次历史文件回填：
-
-```bash
-OSS_PROVIDER=tencent-cos \
-OSS_COS_BUCKET=example-1250000000 \
-OSS_COS_REGION=ap-guangzhou \
-OSS_COS_SECRET_ID=your-secret-id \
-OSS_COS_SECRET_KEY=your-secret-key \
-yarn sync:oss:cos
-```
-
-可选环境变量：
-
-| 变量 | 说明 |
-| --- | --- |
-| `OSS_SYNC_CONCURRENCY` | 历史文件同步并发数，默认 `4` |
+| `OSSURL`   | 文件存储访问地址，用于静态资源访问 |
 
 ---
 
@@ -305,13 +263,7 @@ yarn build
   "env": {
     "NODE_ENV": "prod",
     "PORT": 10588,
-    "OSS_PROVIDER": "tencent-cos",
-    "OSS_COS_BUCKET": "example-1250000000",
-    "OSS_COS_REGION": "ap-guangzhou",
-    "OSS_COS_SECRET_ID": "your-secret-id",
-    "OSS_COS_SECRET_KEY": "your-secret-key",
-    "OSS_COS_PUBLIC_BASE_URL": "https://cdn.example.com",
-    "OSS_COS_PATH_PREFIX": "toonflow"
+    "OSSURL": "http://127.0.0.1:10588/"
   }
 }
 ```
@@ -322,15 +274,7 @@ yarn build
 | ---------- | ---------------------------------- |
 | `NODE_ENV` | 运行环境，`prod` 表示生产环境      |
 | `PORT`     | 服务监听端口                       |
-| `OSSURL` / `OSS_PUBLIC_BASE_URL` | 本地静态资源公网访问前缀 |
-| `OSS_PROVIDER` | 对象存储提供方，腾讯云 COS 填 `tencent-cos` |
-| `OSS_COS_BUCKET` | COS Bucket 名称 |
-| `OSS_COS_REGION` | COS 地域 |
-| `OSS_COS_SECRET_ID` | COS SecretId |
-| `OSS_COS_SECRET_KEY` | COS SecretKey |
-| `OSS_COS_PUBLIC_BASE_URL` | COS / CDN 公网访问前缀 |
-| `OSS_COS_PATH_PREFIX` | 可选，对象前缀 |
-| `OSS_COS_OBJECT_ACL` | 可选，对象 ACL |
+| `OSSURL`   | 文件存储访问地址，用于静态资源访问 |
 
 ---
 
@@ -357,12 +301,12 @@ pm2 monit             # 监控面板
 
 #### 6. 部署前端网站
 
-如需单独部署或定制前端界面，请直接使用本仓库下的 `Toonflow-web/` 目录：
+如需单独部署或定制前端界面，请参考前端仓库：
 
-- 前端源码目录：`Toonflow-web/`
-- 前端构建产物集成目录：`data/web/`
+- **GitHub**：[Toonflow-web](https://github.com/HBAI-Ltd/Toonflow-web)
+- **Gitee**：[Toonflow-web](https://gitee.com/HBAI-Ltd/Toonflow-web)
 
-> 💡 **说明**：本仓库已内置编译好的前端资源，普通用户无需单独部署前端。需要二次开发时，直接在本仓库内修改 `Toonflow-web/` 即可。
+> 💡 **说明**：本仓库已内置编译好的前端资源，普通用户无需单独部署前端。前端仓库仅供需要二次开发的开发者使用。
 
 ---
 
@@ -563,9 +507,10 @@ pm2 monit             # 监控面板
 
 | 仓库             | 说明                               | GitHub                                             | Gitee                                            |
 | ---------------- | ---------------------------------- | -------------------------------------------------- | ------------------------------------------------ |
-| **Toonflow-app** | 完整客户端与前端源码（本仓库） | [GitHub](https://github.com/HBAI-Ltd/Toonflow-app) | [Gitee](https://gitee.com/HBAI-Ltd/Toonflow-app) |
+| **Toonflow-app** | 完整客户端（本仓库，推荐普通用户） | [GitHub](https://github.com/HBAI-Ltd/Toonflow-app) | [Gitee](https://gitee.com/HBAI-Ltd/Toonflow-app) |
+| **Toonflow-web** | 前端源代码（适合前端开发者）       | [GitHub](https://github.com/HBAI-Ltd/Toonflow-web) | [Gitee](https://gitee.com/HBAI-Ltd/Toonflow-web) |
 
-> 💡 **提示**：如果您需要二次开发前端，请直接使用本仓库中的 `Toonflow-web/` 目录。
+> 💡 **提示**：如果您只是想使用 Toonflow，直接下载本仓库的客户端即可。前端仓库仅供需要二次开发或定制前端界面的开发者使用。
 
 ---
 

@@ -45,19 +45,23 @@ export default router.post(
   }),
   async (req, res) => {
     const { projectId, scriptId } = req.body;
-    const projectData = await u.db("o_project").where("id", projectId).select("id", "videoModel").first();
+    const projectData = await u.db("o_project").where("id", projectId).select("id", "videoModel", "mode").first();
+
     if (!projectData?.videoModel) {
       return res.status(400).json(success("项目未配置视频模型"));
     }
-    const [videoId, videoModelName] = projectData.videoModel.split(":");
-    const models = await u.vendor.getModelList(videoId);
-    const findData = models.find((i: any) => i.modelName == videoModelName);
-    const isRef = findData.mode.every((i: any) => Array.isArray(i));
+    let videoMode = "";
+    try {
+      videoMode = JSON.parse(projectData?.mode ?? "");
+    } catch (e) {
+      videoMode = projectData?.mode ?? "";
+    }
+    const isRef = Array.isArray(videoMode) ? true : false;
 
     const storyboardList = await u.db("o_storyboard").where({ scriptId, projectId }).orderBy("index", "asc");
     await Promise.all(
       storyboardList.map(async (i) => {
-        i.filePath = i.filePath ? await u.oss.getFileUrl(i.filePath) : "";
+        i.filePath = i.filePath ? await u.oss.getSmallImageUrl(i.filePath) : "";
       }),
     );
     const activeTrackIds = [...new Set(storyboardList.map((item) => item.trackId).filter((trackId): trackId is number => trackId != null))];
@@ -107,7 +111,7 @@ export default router.post(
             type: i.type,
             fileType: "image" as const,
             sources: "assets",
-            src: i.filePath ? await u.oss.getFileUrl(i.filePath) : "",
+            src: i.filePath ? await u.oss.getSmallImageUrl(i.filePath) : "",
           };
           const sid = i.storyboardId as number;
           if (!otherDataMap[sid]) otherDataMap[sid] = [];
@@ -116,7 +120,6 @@ export default router.post(
       );
     }
 
-    const id = await u.db("o_project").where({ id: projectId }).select("id").first();
     const trackData = activeTrackIds.length ? await u.db("o_videoTrack").whereIn("id", activeTrackIds) : [];
     const videoList = await u.db("o_video").whereIn(
       "videoTrackId",
@@ -162,15 +165,8 @@ export default router.post(
     res.status(200).send(
       success({
         storyboardList: await Promise.all(
-        storyboardList.map(async (s) => ({
-            id: s.id,
-            index: s.index,
-            duration: s.duration ? Number(s.duration) : 0,
-            track: s.track,
-            trackId: s.trackId,
-            state: s.state,
-            shouldGenerateImage: s.shouldGenerateImage,
-            videoDesc: s.videoDesc ?? "",
+          storyboardList.map(async (s) => ({
+            ...s,
             src: s.filePath,
           })),
         ),

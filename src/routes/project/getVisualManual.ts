@@ -30,27 +30,6 @@ function readMd(filePath: string): string {
   }
 }
 
-async function replaceRelativeImageUrls(content: string, basePathSegments: string[]) {
-  if (!content) return content;
-
-  const refs = new Set<string>();
-  for (const match of content.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
-    refs.add(match[1].trim().split(/\s+/)[0]);
-  }
-  for (const match of content.matchAll(/<img[^>]+src=["']([^"']+)["']/g)) {
-    refs.add(match[1].trim());
-  }
-
-  let nextContent = content;
-  for (const ref of refs) {
-    if (!ref || /^(https?:)?\/\//i.test(ref) || ref.startsWith("data:")) continue;
-    const normalizedRef = ref.replace(/^\.\//, "").replace(/^\/+/, "");
-    const imageUrl = await u.oss.getFileUrl(path.join(...basePathSegments, normalizedRef), "skills");
-    nextContent = nextContent.split(ref).join(imageUrl);
-  }
-  return nextContent;
-}
-
 // 获取 images 文件夹下所有图片文件路径列表
 async function readAllImages(imagesDir: string) {
   try {
@@ -85,28 +64,23 @@ export default router.post("/", async (req, res) => {
         const readmePath = path.join(styleDir, "README.md");
         const readmeContent = fs.readFileSync(readmePath, "utf-8");
         const firstLine = readmeContent.split("\n")[0].replace(/--/g, "");
-        const data = await Promise.all(
-          DATA_MAP.map(async ({ label, value, subDir }) => {
-            let mdPath: string;
-            if (subDir) {
-              mdPath = path.join(styleDir, subDir, `${value}.md`);
-            } else {
-              mdPath = path.join(styleDir, `${value}.md`);
-            }
-            const basePathSegments = ["art_skills", styleName, ...(subDir ? [subDir] : [])];
-            return {
-              label,
-              value,
-              data: await replaceRelativeImageUrls(readMd(mdPath), basePathSegments),
-            };
-          }),
-        );
+        const data = DATA_MAP.map(({ label, value, subDir }) => {
+          let mdPath: string;
+          if (subDir) {
+            mdPath = path.join(styleDir, subDir, `${value}.md`);
+          } else {
+            mdPath = path.join(styleDir, `${value}.md`);
+          }
+          return {
+            label,
+            value,
+            data: readMd(mdPath),
+          };
+        });
 
         return {
           name: firstLine,
           image: images,
-          images,
-          coverImage: images[0] ?? "",
           stylePath: styleName,
           data,
         };

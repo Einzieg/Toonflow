@@ -4,7 +4,7 @@ import { z } from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { useSkill } from "@/utils/agent/skillsTools";
-import { stepCountIs, tool } from "ai";
+import { tool } from "ai";
 import { o_script } from "@/types/database";
 
 const router = express.Router();
@@ -71,7 +71,6 @@ export default router.post(
 
     await u.db("o_script").whereIn("id", scriptIds).update({
       extractState: 2,
-      errorReason: null,
     });
 
     const errors: { scriptId: number; error: string }[] = [];
@@ -131,10 +130,16 @@ export default router.post(
         }
       }
 
+      // 去重：相同 scriptId + assetId 只保留一条
+      const uniqueRows = [
+        ...new Map(scriptAssetRows.map((r) => [`${r.scriptId}_${r.assetId}`, r])).values(),
+      ];
+
+
       // 先删除本批 scriptId 的旧关联，再插入新的
       await u.db("o_scriptAssets").whereIn("scriptId", batchScriptIds).delete();
-      if (scriptAssetRows.length) {
-        await u.db("o_scriptAssets").insert(scriptAssetRows);
+      if (uniqueRows.length) {
+        await u.db("o_scriptAssets").insert(uniqueRows);
       }
 
       // 本批成功的剧本状态更新为 1（成功）
@@ -168,7 +173,6 @@ export default router.post(
         // 修改状态为正在提取中
         await u.db("o_script").whereIn("id", validScriptIds).update({
           extractState: 0, // 正在提取
-          errorReason: null,
         });
         // 查询当前项目已有的资产列表，提供给 AI 参考
         const existingAssets = await u.db("o_assets").where("projectId", projectId).select("name", "type");
@@ -193,7 +197,7 @@ export default router.post(
                 .describe("已有资产的引用列表（在已有资产列表中已存在的），只需给出资产名称和使用该资产的 scriptIds"),
             }),
             execute: async ({ newAssets, existingAssetRefs }) => {
-              console.log("[tools] extractAssets result", { newAssets, existingAssetRefs });
+
               if (newAssets?.length) collectedNew = newAssets;
               if (existingAssetRefs?.length) collectedExisting = existingAssetRefs;
               return "无需回复用户任何内容";
@@ -223,7 +227,6 @@ export default router.post(
                 content: `当前已有资产列表：${existingHint}\n\n请根据以下${validScripts.length}集剧本提取对应的剧本资产（角色、场景、道具）:\n\n${scriptsContent}`,
               },
             ],
-            stopWhen: stepCountIs(1),
             tools: { resultTool },
           });
           await persistGroupResult({

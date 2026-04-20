@@ -1,10 +1,10 @@
 import express from "express";
 import u from "@/utils";
 import { z } from "zod";
+import sharp from "sharp";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { buildAssetPrompt } from "@/utils/assetsPrompt";
-import { getReferenceImageBudget, urlToCompressedBase64 } from "@/utils/vm";
+import { Output } from "ai";
 const router = express.Router();
 
 export default router.post(
@@ -27,14 +27,6 @@ export default router.post(
       .leftJoin("o_image", "o_assets.imageId", "o_image.id")
       .whereIn("o_assets.id", parentIds as number[])
       .select("o_assets.id", "o_image.filePath", "o_assets.describe");
-    const assetsSrcArr = await Promise.all(
-      parentAssetsData.map(async (item) => {
-        return {
-          src: await u.oss.getFileUrl(item.filePath),
-          id: item.id,
-        };
-      }),
-    );
     assetsDataArr.forEach((i: any) => {
       const parent = parentAssetsData.find((item) => item.id === i.assetsId);
       if (parent) {
@@ -42,9 +34,23 @@ export default router.post(
       }
     });
     const imageUrlRecord: Record<number, string> = {};
-    assetsSrcArr.forEach((item) => {
-      imageUrlRecord[item.id] = item.src;
+    parentAssetsData.forEach((item) => {
+      if (item.filePath) imageUrlRecord[item.id] = item.filePath;
     });
+    const rolePrompt = u.getArtPrompt(projectSettingData!.artStyle!, "art_skills", "art_character_derivative");
+    const toolPrompt = u.getArtPrompt(projectSettingData!.artStyle!, "art_skills", "art_prop_derivative");
+    const scenePrompt = u.getArtPrompt(projectSettingData!.artStyle!, "art_skills", "art_scene_derivative");
+    const promptRecord: Record<string, { prompt: string }> = {
+      role: {
+        prompt: rolePrompt,
+      },
+      tool: {
+        prompt: toolPrompt,
+      },
+      scene: {
+        prompt: scenePrompt,
+      },
+    };
     // 先批量为所有 assets 创建 image 记录并标记为"生成中"
     const imageIdMap: Record<number, number> = {};
     for (const item of assetsDataArr) {
@@ -63,17 +69,22 @@ export default router.post(
     res.status(200).send(success("开始生成资产图片"));
     const generateSingleAsset = async (item: any) => {
       const imageId = imageIdMap[item.id!];
-      const text = buildAssetPrompt({
-        type: item.type as "role" | "scene" | "tool",
-        name: item.name,
-        describe: [item.parentDescribe, item.describe].filter(Boolean).join("\n"),
-        artStyle: projectSettingData?.artStyle,
-        derivative: !!item.assetsId,
-      });
+      const typeConfig = promptRecord[item.type!] || promptRecord["role"];
 
-      const imageBase64 = imageUrlRecord[item.assetsId!]
-        ? await urlToCompressedBase64(imageUrlRecord[item.assetsId!], getReferenceImageBudget(1))
-        : null;
+      const { text } = await u.Ai.Text("universalAi").invoke({
+        system: `${typeConfig.prompt}`,
+        messages: [
+          {
+            role: "user",
+            content: `
+            父级资产描述: ${item.parentDescribe || "无详细描述"}
+            当前资产描述: ${item.describe || "无详细描述"}`,
+          },
+        ],
+      });
+        await u.db("o_assets").where("id", item.id).update({ prompt: text });
+
+      const imageBase64 = imageUrlRecord[item.assetsId!] ? await u.oss.getImageBase64(imageUrlRecord[item.assetsId!]) : null;
       try {
         const repeloadObj = {
           prompt: text,
@@ -94,14 +105,11 @@ export default router.post(
         );
         const savePath = `/${projectId}/assets/${scriptId}/${item.type}/${u.uuid()}.jpg`;
         await imageCls.save(savePath);
-        await u.db("o_assets").where("id", item.id).update({ prompt: text });
         await u.db("o_image").where({ id: imageId }).update({ state: "已完成", filePath: savePath });
-        const src = await u.oss.getFileUrl(savePath);
         return {
           id: item.id!,
           state: "已完成",
-          src,
-          thumbSrc: u.oss.buildImagePreviewUrl(src, { width: 480, format: "webp" }),
+          src: await u.oss.getSmallImageUrl(savePath),
         };
       } catch (e) {
         await u

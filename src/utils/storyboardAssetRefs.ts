@@ -121,14 +121,15 @@ function resolveAssetIdByRef(ref: ExtractedStoryboardAssetRef, projectAssets: St
   if (!refName) return null;
 
   let bestMatch: { id: number; score: number } | null = null;
-  projectAssets.forEach((asset) => {
-    if (!Number.isInteger(asset.id) || !asset.name) return;
+  for (const asset of projectAssets) {
+    const assetId = asset.id;
+    if (!Number.isInteger(assetId) || assetId == null || !asset.name) continue;
 
     const assetType = normalizeAssetType(asset.type);
-    if (ref.type && assetType && ref.type !== assetType) return;
+    if (ref.type && assetType && ref.type !== assetType) continue;
 
     const assetName = normalizeAssetLookupName(asset.name);
-    if (!assetName) return;
+    if (!assetName) continue;
 
     let score = 0;
     if (assetName === refName) {
@@ -137,14 +138,14 @@ function resolveAssetIdByRef(ref: ExtractedStoryboardAssetRef, projectAssets: St
       score += 500 - Math.abs(refName.length - assetName.length);
     }
 
-    if (score <= 0) return;
+    if (score <= 0) continue;
     if (ref.type && assetType === ref.type) score += 100;
     score += Math.min(refName.length, assetName.length);
 
     if (!bestMatch || score > bestMatch.score) {
-      bestMatch = { id: asset.id, score };
+      bestMatch = { id: assetId, score };
     }
-  });
+  }
 
   return bestMatch?.id ?? null;
 }

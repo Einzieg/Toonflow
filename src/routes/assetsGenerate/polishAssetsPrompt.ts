@@ -3,38 +3,11 @@ import u from "@/utils";
 import * as zod from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { buildAssetPrompt } from "@/utils/assetsPrompt";
 const router = express.Router();
-interface OutlineItem {
-  description: string;
-  name: string;
-}
 
-interface OutlineData {
-  chapterRange: number[];
-  characters?: OutlineItem[];
-  props?: OutlineItem[];
-  scenes?: OutlineItem[];
-}
-
-interface NovelChapter {
-  id: number;
-  reel: string;
-  chapter: string;
-  chapterData: string;
-  projectId: number;
-}
 
 type ItemType = "characters" | "props" | "scenes";
 
-interface ResultItem {
-  type: ItemType;
-  name: string;
-  chapterRange: number[];
-}
-function findItemByName(items: ResultItem[], name: string, type?: ItemType): ResultItem | undefined {
-  return items.find((item) => (!type || item.type === type) && item.name === name);
-}
 //润色提示词
 export default router.post(
   "/",
@@ -50,9 +23,10 @@ export default router.post(
     //获取风格
     const project = await u.db("o_project").where("id", projectId).select("artStyle", "type", "intro").first();
     //如果没有找到对应的项目，返回错误
-    if (!project) return res.status(500).send(error("项目不存在或已被删除"));
+    if (!project) return res.status(500).send(success({ message: "项目为空" }));
 
     await u.db("o_assets").where("id", assetsId).update({ promptState: "生成中" });
+
     //查询资产是否是衍生资产
     const assetsData = await u.db("o_assets").where("id", assetsId).select("assetsId").first();
     if (!assetsData) return { code: 500, message: "资产不存在" };
@@ -82,17 +56,6 @@ export default router.post(
 
     const config = typeConfig[type];
     if (!config) return res.status(500).send(error("不支持的类型"));
-    if (type === "role" || type === "scene" || type === "tool") {
-      const assetPrompt = buildAssetPrompt({
-        type: type as "role" | "scene" | "tool",
-        name,
-        describe,
-        artStyle: project.artStyle,
-        derivative: !!assetsData.assetsId,
-      });
-      await u.db("o_assets").where("id", assetsId).update({ prompt: assetPrompt, promptState: "已完成", promptErrorReason: "" });
-      return res.status(200).send(success({ prompt: assetPrompt, assetsId }));
-    }
     if (!config.visualManual) return res.status(500).send(error("视觉手册未定义"));
     //获取到视觉手册
     const visualManual = await u.getArtPrompt(project.artStyle as string, "art_skills", config.visualManual);

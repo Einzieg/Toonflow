@@ -4,38 +4,73 @@ import axios from "axios";
 import { transform } from "sucrase";
 import u from "@/utils";
 
-type AiType = "scriptAgent" | "productionAgent" | "universalAi";
+type AiType =
+  | "scriptAgent"
+  | "productionAgent"
+  | "universalAi"
+  | "scriptAgent:decisionAgent"
+  | "scriptAgent:supervisionAgent"
+  | "scriptAgent:storySkeletonAgent"
+  | "scriptAgent:adaptationStrategyAgent"
+  | "scriptAgent:scriptAgent"
+  | "productionAgent:decisionAgent"
+  | "productionAgent:supervisionAgent"
+  | "productionAgent:deriveAssetsAgent"
+  | "productionAgent:generateAssetsAgent"
+  | "productionAgent:directorPlanAgent"
+  | "productionAgent:storyboardGenAgent"
+  | "productionAgent:storyboardPanelAgent"
+  | "productionAgent:storyboardTableAgent";
+
 type FnName = "textRequest" | "imageRequest" | "videoRequest" | "ttsRequest";
 
-const AiTypeValues: AiType[] = ["scriptAgent", "productionAgent", "universalAi"];
-function normalizeVendorInputValues(vendorId: string, inputValues: Record<string, string>) {
-  if (vendorId === "klingai") {
-    const accessKey = inputValues.accessKey || inputValues.apiKey || inputValues.ak || inputValues.access_key || "";
-    const secretKey = inputValues.secretKey || inputValues.sk || inputValues.secret_key || inputValues.apiSecret || inputValues.secret || "";
-    inputValues.accessKey = String(accessKey).trim();
-    inputValues.secretKey = String(secretKey).trim();
-    if (!inputValues.apiKey) inputValues.apiKey = inputValues.accessKey;
-    if (!inputValues.sk) inputValues.sk = inputValues.secretKey;
-  }
-
-  const baseUrl = inputValues.baseUrl?.trim().replace(/\/+$/, "");
-  if (!baseUrl) return inputValues;
-
-  if (vendorId === "openai" && /^https?:\/\/openrouter\.ai\/v1$/i.test(baseUrl)) {
-    inputValues.baseUrl = "https://openrouter.ai/api/v1";
-    return inputValues;
-  }
-
-  inputValues.baseUrl = baseUrl;
-  return inputValues;
-}
+const AiTypeValues: AiType[] = [
+  "scriptAgent",
+  "productionAgent",
+  "universalAi",
+  "scriptAgent:decisionAgent",
+  "scriptAgent:supervisionAgent",
+  "scriptAgent:storySkeletonAgent",
+  "scriptAgent:adaptationStrategyAgent",
+  "scriptAgent:scriptAgent",
+  "productionAgent:decisionAgent",
+  "productionAgent:supervisionAgent",
+  "productionAgent:deriveAssetsAgent",
+  "productionAgent:generateAssetsAgent",
+  "productionAgent:directorPlanAgent",
+  "productionAgent:storyboardGenAgent",
+  "productionAgent:storyboardPanelAgent",
+  "productionAgent:storyboardTableAgent",
+  "universalAi",
+];
 async function resolveModelName(value: AiType | `${string}:${string}`): Promise<`${string}:${string}`> {
   if (AiTypeValues.includes(value as AiType)) {
     const agentDeployData = await u.db("o_agentDeploy").where("key", value).first();
-    if (!agentDeployData?.modelName) throw new Error(`${value}模型未配置`);
-    return agentDeployData.modelName as `${number}:${string}`;
+    let modelName = null;
+    if (!agentDeployData?.modelName) {
+      const [mainly] = agentDeployData!.key!.split(/:(.+)/);
+      const mainlyData = await u.db("o_agentDeploy").where("key", mainly).first();
+      if (!mainlyData?.modelName) throw new Error(`未找到部署配置 ${value}`);
+      modelName = mainlyData.modelName;
+    }
+    modelName = agentDeployData?.modelName || modelName;
+    return modelName as `${number}:${string}`;
   }
   return value as `${number}:${string}`;
+}
+
+async function getModelConfig(value: AiType | `${string}:${string}`) {
+  if (AiTypeValues.includes(value as AiType)) {
+    const agentDeployData = await u.db("o_agentDeploy").where("key", value).first();
+    if (!agentDeployData?.modelName) {
+      const [mainly] = agentDeployData!.key!.split(/:(.+)/);
+      const mainlyData = await u.db("o_agentDeploy").where("key", mainly).first();
+      if (!mainlyData?.modelName) throw new Error(`未找到部署配置 ${value}`);
+      return mainlyData;
+    }
+    return agentDeployData;
+  }
+  return null;
 }
 
 async function getVendorTemplateFn(
@@ -44,7 +79,7 @@ async function getVendorTemplateFn(
 ): Promise<(think?: boolean, thinkLevel?: 0 | 1 | 2 | 3) => any>;
 async function getVendorTemplateFn(fnName: Exclude<FnName, "textRequest">, modelName: `${string}:${string}`): Promise<(input: any) => any>;
 async function getVendorTemplateFn(fnName: FnName, modelName: `${string}:${string}`): Promise<any> {
-  const [id, name] = modelName.split(":");
+  const [id, name] = modelName.split(/:(.+)/);
   const vendorConfigData = await u.db("o_vendorConfig").where("id", id).first();
   if (!vendorConfigData) throw new Error(`未找到供应商配置 id=${id}`);
   const modelList = await u.vendor.getModelList(id);
@@ -53,9 +88,8 @@ async function getVendorTemplateFn(fnName: FnName, modelName: `${string}:${strin
   const code = u.vendor.getCode(id);
   const jsCode = transform(code, { transforms: ["typescript"] }).code;
   const running = u.vm(jsCode);
-  const inputValues = normalizeVendorInputValues(id, JSON.parse(vendorConfigData.inputValues ?? "{}"));
   if (running.vendor) {
-    Object.assign(running.vendor.inputValues, inputValues);
+    Object.assign(running.vendor.inputValues, JSON.parse(vendorConfigData.inputValues ?? "{}"));
     running.vendor.models = modelList;
   }
   const fn = running[fnName];
@@ -77,7 +111,7 @@ async function withTaskRecord<T>(
   fn: (modelName: `${string}:${string}`, think: Boolean, thinkLevel: 0 | 1 | 2 | 3) => Promise<T>,
 ): Promise<T> {
   const modelName = await resolveModelName(modelKey);
-  const [id, model] = modelName.split(":");
+  const [_, model] = modelName.split(/:(.+)/);
   const taskRecord = await u.task(projectId, taskClass, model, { describe: describe, content: relatedObjects });
   try {
     const result = await fn(modelName, false, 0);
@@ -90,20 +124,9 @@ async function withTaskRecord<T>(
 }
 
 async function urlToBase64(url: string, retries = 3, delay = 1000): Promise<string> {
-  const localOssPath = u.oss.getLocalPathFromPublicUrl(url);
-  if (localOssPath) {
-    const dataUrl = await u.oss.getImageBase64(localOssPath);
-    return dataUrl.replace(/^data:[^;]+;base64,/, "");
-  }
-
-  const targetUrl = u.oss.resolveFetchUrl(url);
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await axios.get(targetUrl, {
-        responseType: "arraybuffer",
-        timeout: 30000,
-        maxRedirects: 5,
-      });
+      const res = await axios.get(url, { responseType: "arraybuffer" });
       const base64 = Buffer.from(res.data).toString("base64");
       return `${base64}`;
     } catch (e) {
@@ -112,10 +135,6 @@ async function urlToBase64(url: string, retries = 3, delay = 1000): Promise<stri
     }
   }
   throw new Error("urlToBase64 failed");
-}
-
-function shouldFetchBinaryResult(result: string) {
-  return /^https?:\/\//i.test(result) || result.startsWith("/");
 }
 class AiText {
   private AiType: AiType | `${string}:${string}`;
@@ -126,46 +145,37 @@ class AiText {
     this.think = think;
     this.thinkLevel = thinkLevel;
   }
-  async invoke(input: Omit<Parameters<typeof generateText>[0], "model">) {
+  private async resolveModel(middleware?: any | any[]) {
     const switchAiDevTool = await u.db("o_setting").where("key", "switchAiDevTool").first();
     const modelName = await resolveModelName(this.AiType);
     const sdkFn = await getVendorTemplateFn("textRequest", modelName);
+    const baseModel = await sdkFn(this.think, this.thinkLevel);
+    const mws = [
+      ...(switchAiDevTool?.value === "1" ? [devToolsMiddleware()] : []),
+      ...(middleware ? (Array.isArray(middleware) ? middleware : [middleware]) : []),
+    ];
+    return mws.length > 0 ? wrapLanguageModel({ model: baseModel, middleware: mws.length === 1 ? mws[0] : mws }) : baseModel;
+  }
+  async invoke(input: Omit<Parameters<typeof generateText>[0], "model">) {
+    const config = await getModelConfig(this.AiType);
+
     return generateText({
       ...(input.tools && { stopWhen: stepCountIs(Object.keys(input.tools).length * 50) }),
       ...input,
-      model:
-        switchAiDevTool?.value === "1"
-          ? wrapLanguageModel({
-              model: await sdkFn(this.think, this.thinkLevel),
-              middleware: devToolsMiddleware(),
-            })
-          : await sdkFn(this.think, this.thinkLevel),
+      model: await this.resolveModel(),
+      ...(config?.temperature && { temperature: config.temperature }),
+      ...(config?.maxOutputTokens && { maxOutputTokens: config.maxOutputTokens }),
     } as Parameters<typeof generateText>[0]);
   }
   async stream(input: Omit<Parameters<typeof streamText>[0], "model">) {
-    const switchAiDevTool = await u.db("o_setting").where("key", "switchAiDevTool").first();
-    const modelName = await resolveModelName(this.AiType);
-    const sdkFn = await getVendorTemplateFn("textRequest", modelName);
+    const config = await getModelConfig(this.AiType);
+
     return streamText({
       ...(input.tools && { stopWhen: stepCountIs(Object.keys(input.tools).length * 50) }),
       ...input,
-      model:
-        switchAiDevTool?.value == "1"
-          ? wrapLanguageModel({
-              model: sdkFn(this.think, this.thinkLevel),
-              middleware: [
-                devToolsMiddleware(),
-                extractReasoningMiddleware({
-                  tagName: "reasoning_content",
-                }),
-              ],
-            })
-          : wrapLanguageModel({
-              model: sdkFn(this.think, this.thinkLevel),
-              middleware: extractReasoningMiddleware({
-                tagName: "reasoning_content",
-              }),
-            }),
+      model: await this.resolveModel(extractReasoningMiddleware({ tagName: "reasoning_content", separator: "\n" })),
+      ...(config?.temperature && { temperature: config.temperature }),
+      ...(config?.maxOutputTokens && { maxOutputTokens: config.maxOutputTokens }),
     } as Parameters<typeof streamText>[0]);
   }
 }
@@ -180,30 +190,6 @@ function referenceList2imageBase642(id: string, input: any) {
 }
 
 type ReferenceList = { type: "image"; base64: string } | { type: "audio"; base64: string } | { type: "video"; base64: string };
-
-const SIMPLE_VIDEO_MODES = new Set(["singleImage", "startEndRequired", "endFrameOptional", "startFrameOptional", "text"]);
-
-function normalizeVideoModeList(mode: unknown): VideoMode[] {
-  if (Array.isArray(mode)) {
-    if (mode.length === 0) return ["text"];
-    if (Array.isArray(mode[0]) || SIMPLE_VIDEO_MODES.has(String(mode[0]))) {
-      return mode as VideoMode[];
-    }
-    return [mode as Extract<VideoMode, (`videoReference:${number}` | `imageReference:${number}` | `audioReference:${number}`)[]>];
-  }
-
-  if (typeof mode === "string") {
-    try {
-      const parsed = JSON.parse(mode);
-      if (Array.isArray(parsed)) {
-        return [parsed as Extract<VideoMode, (`videoReference:${number}` | `imageReference:${number}` | `audioReference:${number}`)[]>];
-      }
-    } catch {}
-    return [mode as Exclude<VideoMode, (`videoReference:${number}` | `imageReference:${number}` | `audioReference:${number}`)[]>];
-  }
-
-  return ["text"];
-}
 
 interface ImageConfig {
   prompt: string;
@@ -229,12 +215,9 @@ class AiImage {
     const modelName = await resolveModelName(this.key);
     const exec = async (mn: `${string}:${string}`) => {
       const fn = await getVendorTemplateFn("imageRequest", mn);
-      await referenceList2imageBase642(mn.split(":")[0], input);
+      await referenceList2imageBase642(mn.split(/:(.+)/)[0], input);
       this.result = await fn(input);
-      if (typeof this.result !== "string" || !this.result.trim()) {
-        throw new Error("图片模型未返回有效结果，请检查供应商脚本是否正确实现了 imageRequest");
-      }
-      if (shouldFetchBinaryResult(this.result)) this.result = await urlToBase64(this.result);
+      if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
       return this;
     };
     if (taskRecord) {
@@ -276,16 +259,10 @@ class AiVideo {
     const modelName = await resolveModelName(this.key);
     const exec = async (mn: `${string}:${string}`) => {
       const fn = await getVendorTemplateFn("videoRequest", mn);
-      const normalizedInput = {
-        ...input,
-        mode: normalizeVideoModeList(input.mode),
-      };
-      await referenceList2imageBase642(mn.split(":")[0], normalizedInput);
-      this.result = await fn(normalizedInput);
-      if (typeof this.result !== "string" || !this.result.trim()) {
-        throw new Error("视频模型未返回有效结果，请检查供应商脚本是否正确实现了 videoRequest");
-      }
-      if (shouldFetchBinaryResult(this.result)) this.result = await urlToBase64(this.result);
+      await referenceList2imageBase642(mn.split(/:(.+)/)[0], input);
+
+      this.result = await fn(input);
+      if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
       return this;
     };
     if (taskRecord) {
@@ -308,12 +285,9 @@ class AiAudio {
     const modelName = await resolveModelName(this.key);
     const exec = async (mn: `${string}:${string}`) => {
       const fn = await getVendorTemplateFn("ttsRequest", mn);
-      await referenceList2imageBase642(mn.split(":")[0], input);
+      await referenceList2imageBase642(mn.split(/:(.+)/)[0], input);
       this.result = await fn(input);
-      if (typeof this.result !== "string" || !this.result.trim()) {
-        throw new Error("音频模型未返回有效结果，请检查供应商脚本是否正确实现了 ttsRequest");
-      }
-      if (shouldFetchBinaryResult(this.result)) this.result = await urlToBase64(this.result);
+      if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
       return this;
     };
     if (taskRecord) {

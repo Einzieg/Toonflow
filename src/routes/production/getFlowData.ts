@@ -48,7 +48,7 @@ export default router.post(
       .andWhere("o_assets.assetsId", null)
       .where("o_assets.projectId", projectId);
 
-    let childAssetsData = await u
+    const childAssetsData = await u
       .db("o_assets")
       .leftJoin("o_image", "o_assets.imageId", "o_image.id")
       .select("o_assets.*", "o_image.filePath", "o_image.state", "o_image.errorReason")
@@ -86,7 +86,11 @@ export default router.post(
     );
     const storyboardIds = resolvedStoryboardData.map((item) => item.id).filter(Boolean);
     const storyboardAssetRows = storyboardIds.length
-      ? await u.db("o_assets2Storyboard").whereIn("storyboardId", storyboardIds).orderBy("rowid")
+      ? await u
+          .db("o_assets2Storyboard")
+          .whereIn("storyboardId", storyboardIds)
+          .orderBy("storyboardId", "asc")
+          .orderBy("rowid", "asc")
       : [];
 
     const assets2StoryboardMap: Record<number, number[]> = {};
@@ -149,7 +153,7 @@ export default router.post(
                       desc: child.describe ?? "",
                       src: childImage.src,
                       thumbSrc: childImage.thumbSrc,
-                      state: child.state ?? "未生成", //todo：矫正状态值
+                      state: child.state ?? "未生成",
                     };
                   }),
               ),
@@ -163,10 +167,6 @@ export default router.post(
         workbench: {
           videoList: [],
         },
-        // //todo：矫正封面数据
-        // poster: {
-        //   items: [],
-        // },
       };
       return res.status(200).send(success(flowData));
     } else {

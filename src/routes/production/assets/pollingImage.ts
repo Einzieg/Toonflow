@@ -19,14 +19,10 @@ export default router.post(
       .whereNot("o_image.state", "生成中")
       .select("o_image.state", "o_assets.id", "o_image.filePath", "o_image.errorReason","o_assets.prompt");
     const result = await Promise.all(
-      data.map(async (item: any) => {
-        const src = item.filePath ? await u.oss.getFileUrl(item.filePath) : null;
-        return {
-          ...item,
-          src,
-          thumbSrc: src ? u.oss.buildImagePreviewUrl(src, { width: 480, format: "webp" }) : null,
-        };
-      }),
+      data.map(async (item: any) => ({
+        ...item,
+        src: item.filePath ? await u.oss.getSmallImageUrl(item.filePath) : null,
+      })),
     );
     res.status(200).send(success(result));
   },

@@ -5,8 +5,6 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { buildAssetPrompt } from "@/utils/assetsPrompt";
-import { compressReferenceBase64, getReferenceImageBudget } from "@/utils/vm";
 
 const router = express.Router();
 
@@ -77,16 +75,10 @@ const requestSchema = {
 
 export default router.post("/", validateFields(requestSchema), async (req, res) => {
   const { projectId, model, resolution, concurrentCount, items } = req.body;
-  const referenceBudget = getReferenceImageBudget(1);
 
   // 1. 查询项目
   const project = await u.db("o_project").where("id", projectId).select("artStyle", "type", "intro").first();
   if (!project) return res.status(500).send(error("项目为空"));
-  const assetMetaList = await u.db("o_assets").whereIn(
-    "id",
-    items.map((item: { id: number }) => item.id),
-  ).select("id", "describe", "assetsId");
-  const assetMetaMap = new Map(assetMetaList.map((item: { id: number; describe: string; assetsId: number | null }) => [item.id, item]));
 
   // 2. 逐条插入 o_image 占位记录，收集 imageId 列表
   const totalNovelId: number[] = [];
@@ -110,36 +102,21 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
       if (data?.state === "生成失败") {
         return;
       }
-      const assetMeta = assetMetaMap.get(item.id);
-      if (!assetMeta) {
-        await u.db("o_image").where("id", imageId).update({ state: "生成失败", errorReason: "资产不存在" });
-        return;
-      }
       const cfg = assetTypeConfig[item.type as AssetType];
       if (!cfg) return;
-      const assetType = item.type as AssetType;
 
       await u.db("o_assets").where("id", item.id).update({ imageId });
 
       const imagePath = `/${projectId}/${cfg.dir}/${uuidv4()}.jpg`;
-      const userPrompt = buildAssetPrompt({
-        type: assetType,
-        name: item.name,
-        describe: assetMeta.describe,
-        prompt: item.prompt,
-        artStyle: project.artStyle,
-        derivative: !!assetMeta.assetsId,
-      });
-      const describe = `生成${cfg.label}图，名称：${item.name}，描述：${assetMeta.describe || item.prompt || "无"}`;
+      const userPrompt = buildPrompt(cfg, project.artStyle ?? "", item.name, item.prompt);
+      const describe = `生成${cfg.label}图，名称：${item.name}，提示词：${item.prompt}`;
       const relatedObjects = { id: item.id, projectId, type: cfg.label };
       try {
         const aiImage = u.Ai.Image(model);
         await aiImage.run(
           {
             prompt: userPrompt,
-            referenceList: item.base64
-              ? [{ base64: await compressReferenceBase64(item.base64, referenceBudget), type: "image" }]
-              : [],
+            referenceList: item.base64 ? [{ base64: item.base64, type: "image" }] : [],
             size: resolution,
             aspectRatio: "16:9",
           },
@@ -150,7 +127,7 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
             relatedObjects: JSON.stringify(relatedObjects),
           },
         );
-        await aiImage.save(imagePath);
+        aiImage.save(imagePath);
 
         const imageData = await u.db("o_image").where("id", imageId).select("*").first();
         console.log("%c Line:133 🥒 imageData", "background:#465975", imageData);
@@ -164,7 +141,7 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
             state: "已完成",
             filePath: imagePath,
             type: item.type,
-            model: model.split(":")[1],
+            model: model.split(/:(.+)/)[1],
             resolution,
           });
 

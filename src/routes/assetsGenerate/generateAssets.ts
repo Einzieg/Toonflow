@@ -4,8 +4,6 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { buildAssetPrompt } from "@/utils/assetsPrompt";
-import { compressReferenceBase64, getReferenceImageBudget } from "@/utils/vm";
 
 const router = express.Router();
 
@@ -75,17 +73,13 @@ const requestSchema = {
 
 export default router.post("/", validateFields(requestSchema), async (req, res) => {
   const { projectId, model, resolution, id, type, name, prompt, base64 } = req.body;
-  const referenceBase64 = base64 ? await compressReferenceBase64(base64, getReferenceImageBudget(1)) : null;
 
   // 1. 查询项目 & 获取类型配置
   const project = await u.db("o_project").where("id", projectId).select("artStyle", "type", "intro").first();
-  if (!project) return res.status(500).send(error("项目不存在或已被删除"));
-  const assetData = await u.db("o_assets").where("id", id).select("describe", "assetsId").first();
-  if (!assetData) return res.status(500).send(error("资产不存在或已被删除"));
+  if (!project) return res.status(500).send(success({ message: "项目为空" }));
 
   const cfg = assetTypeConfig[type as AssetType];
   if (!cfg) return res.status(400).send(error("不支持的类型"));
-  const assetType = type as AssetType;
 
   // 2. 创建图片占位记录
   const [imageId] = await u.db("o_image").insert({
@@ -97,15 +91,8 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
 
   // 3. 准备生成参数
   const imagePath = `/${projectId}/${cfg.dir}/${uuidv4()}.jpg`;
-  const userPrompt = buildAssetPrompt({
-    type: assetType,
-    name,
-    describe: assetData.describe,
-    prompt,
-    artStyle: project.artStyle,
-    derivative: !!assetData.assetsId,
-  });
-  const describe = `生成${cfg.label}图，名称：${name}，描述：${assetData.describe || prompt || "无"}`;
+  const userPrompt = buildPrompt(cfg, project.artStyle!, name, prompt);
+  const describe = `生成${cfg.label}图，名称：${name}，提示词：${prompt}`;
   const relatedObjects = { id, projectId, type: cfg.label };
 
   try {
@@ -113,7 +100,7 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
     await aiImage.run(
       {
         prompt: userPrompt,
-        referenceList: referenceBase64 ? [{ type: "image", base64: referenceBase64 }] : [],
+        referenceList: base64 ? [{ type: "image", base64 }] : [],
         size: resolution,
         aspectRatio: "16:9",
       },
@@ -124,7 +111,7 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
         relatedObjects: JSON.stringify(relatedObjects),
       },
     );
-    await aiImage.save(imagePath);
+    aiImage.save(imagePath);
     // 5. 更新记录 & 返回结果
     const imageData = await u.db("o_image").where("id", imageId).select("*").first();
     if (!imageData) return res.status(500).send("资产已被删除");
@@ -136,11 +123,11 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
         state: "已完成",
         filePath: imagePath,
         type,
-        model: model.split(":")[1],
+        model: model.split(/:(.+)/)[1],
         resolution,
       });
 
-    const path = await u.oss.getFileUrl(imagePath);
+    const path = await u.oss.getSmallImageUrl(imagePath);
     await u.db("o_assets").where("id", id).update({ imageId });
 
     return res.status(200).send(success({ path, assetsId: id }));

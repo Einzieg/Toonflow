@@ -21,12 +21,9 @@ export default router.post(
 
       if (node.type == "generated") {
         node.data.generatedImage = node.data.generatedImage ? u.replaceUrl(node.data.generatedImage) : "";
-        if (Array.isArray(node.data.references)) {
-          node.data.references = node.data.references.map((reference: any) => ({
-            ...reference,
-            image: reference?.image ? u.replaceUrl(reference.image) : "",
-          }));
-        }
+        node.data.references.forEach((item: { image: string }) => {
+          item.image = item.image ? u.replaceUrl(item.image) : "";
+        });
       }
     });
 

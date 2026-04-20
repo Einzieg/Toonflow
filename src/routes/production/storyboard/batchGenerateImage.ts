@@ -1,10 +1,8 @@
 import express from "express";
 import u from "@/utils";
 import { z } from "zod";
-import sharp from "sharp";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { Output, tool } from "ai";
 import { getReferenceImageBudget, urlToCompressedBase64 } from "@/utils/vm";
 import { assetItemSchema } from "@/agents/productionAgent/tools";
 const router = express.Router();
@@ -31,7 +29,7 @@ export default router.post(
       concurrentCount: number;
     } = req.body;
     if (!storyboardIds || storyboardIds.length === 0) return res.status(400).send(error("storyboardIds不能为空"));
-    let finalStoryboardIds: number[] = storyboardIds || [];
+    const finalStoryboardIds: number[] = storyboardIds || [];
     // 显式发起分镜生图时，以请求的 storyboardIds 为准；只跳过没有提示词的分镜。
     await u
       .db("o_storyboard")

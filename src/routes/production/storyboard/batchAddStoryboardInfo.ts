@@ -127,10 +127,10 @@ export default router.post(
         ? null
         : existingStoryboards.find(
             (storyboard) =>
-            storyboard.prompt === item.prompt &&
-            String(storyboard.duration ?? "") === String(item.duration) &&
-            (storyboard.videoDesc ?? "") === item.videoDesc &&
-            (storyboard.track ?? "") === item.track,
+              storyboard.prompt === item.prompt &&
+              String(storyboard.duration ?? "") === String(item.duration) &&
+              (storyboard.videoDesc ?? "") === item.videoDesc &&
+              (storyboard.track ?? "") === item.track,
           ) ?? null;
 
       let id: number;
