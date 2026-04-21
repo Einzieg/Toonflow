@@ -43,6 +43,27 @@ export function normalizeError(error: unknown): NormalizedError {
     };
   }
 
+  // OpenAI-compatible providers sometimes throw plain objects.
+  if (typeof error === "object" && error !== null) {
+    const serialized = serializeError(error) as Record<string, any>;
+    const message =
+      typeof serialized.message === "string" && serialized.message
+        ? serialized.message
+        : typeof (error as any).message === "string" && (error as any).message
+          ? (error as any).message
+          : JSON.stringify(serialized);
+
+    return {
+      name: serialized.name || "UnknownError",
+      message: message || "未知错误",
+      code: serialized.code,
+      status: serialized.status,
+      stack: serialized.stack,
+      responseData: serialized.responseData,
+      meta: extractMeta(serialized),
+    };
+  }
+
   // 非 Error
   return {
     name: "UnknownError",

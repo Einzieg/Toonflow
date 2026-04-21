@@ -86,6 +86,8 @@ import imageListCacheStore from "@/stores/imageListCache";
 import JSZip from "jszip";
 import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
 
+const VIDEO_PROMPT_TIMEOUT = 5 * 60 * 1000;
+
 const { project } = storeToRefs(projectStore());
 const { removeCache } = imageListCacheStore();
 const episodesId = inject<Ref<number>>("episodesId")!;
@@ -294,12 +296,16 @@ function batchGenText() {
       if (genTextLoadingMap.value[trackId]) return;
       genTextLoadingMap.value[trackId] = true;
       try {
-        const { data } = await axios.post("/production/workbench/generateVideoPrompt", {
-          projectId: project.value?.id,
-          trackId,
-          info,
-          model: props.modelParmas.model,
-        });
+        const { data } = await axios.post(
+          "/production/workbench/generateVideoPrompt",
+          {
+            projectId: project.value?.id,
+            trackId,
+            info,
+            model: props.modelParmas.model,
+          },
+          { timeout: VIDEO_PROMPT_TIMEOUT },
+        );
         const targetTrack = trackList.value.find((item) => item.id === trackId);
         if (targetTrack) targetTrack.prompt = data;
         checkedTrackIds.value = [];

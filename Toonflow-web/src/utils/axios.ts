@@ -35,7 +35,7 @@ function resolveBaseUrl(baseUrl: string, isElectron: boolean) {
 instance.interceptors.request.use(function (config) {
   const { baseUrl, otherSetting, isElectron } = storeToRefs(settingStore());
   config.baseURL = resolveBaseUrl(baseUrl.value, isElectron.value);
-  config.timeout = otherSetting.value.axiosTimeOut;
+  config.timeout = config.timeout ?? otherSetting.value.axiosTimeOut;
   const token = localStorage.getItem("token");
   if (token) {
     config.headers.Authorization = token;

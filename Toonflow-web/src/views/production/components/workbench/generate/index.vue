@@ -60,6 +60,8 @@ import projectStore from "@/stores/project";
 import promptEditor from "@/components/promptEditor.vue";
 import imageListCacheStore from "@/stores/imageListCache";
 
+const VIDEO_PROMPT_TIMEOUT = 5 * 60 * 1000;
+
 const { project } = storeToRefs(projectStore());
 const episodesId = inject<Ref<number>>("episodesId")!;
 const activeTrackIndex = ref(0);
@@ -319,12 +321,16 @@ async function genText() {
   }
   genTextLoadingMap.value[currentTrackId] = true;
   try {
-    const { data } = await axios.post("/production/workbench/generateVideoPrompt", {
-      projectId: project.value?.id,
-      trackId: currentTrackId,
-      info: info,
-      model: modelParmas.value.model,
-    });
+    const { data } = await axios.post(
+      "/production/workbench/generateVideoPrompt",
+      {
+        projectId: project.value?.id,
+        trackId: currentTrackId,
+        info: info,
+        model: modelParmas.value.model,
+      },
+      { timeout: VIDEO_PROMPT_TIMEOUT },
+    );
     changeTrack.prompt = data;
   } catch (e) {
     window.$message.error((e as Error)?.message ?? "提示词生成失败");

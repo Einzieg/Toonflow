@@ -12,6 +12,11 @@ function normalizeVideoState(state?: string | null) {
   return "未生成";
 }
 
+async function getRenderableVideoSrc(filePath?: string | null, state?: string | null) {
+  if (normalizeVideoState(state) !== "已完成" || !filePath) return "";
+  return u.oss.getFileUrl(filePath);
+}
+
 interface VideoItem {
   id: number;
   src: string;
@@ -155,7 +160,7 @@ export default router.post(
             .filter((v) => v.videoTrackId === trackId)
             .map(async (v) => ({
               id: v.id!,
-              src: v.filePath ? await u.oss.getFileUrl(v.filePath) : "",
+              src: await getRenderableVideoSrc(v.filePath, v.state),
               state: normalizeVideoState(v.state),
               errorReason: v.errorReason ?? "",
             })),

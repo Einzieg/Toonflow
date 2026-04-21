@@ -163,14 +163,15 @@ export function normalizeStoryboardAssociateAssets(
   const validExistingIds = dedupeIds(
     (input.associateAssetsIds ?? []).filter((assetId): assetId is number => Number.isInteger(assetId) && assetIdSet.has(assetId)),
   );
+  const rawExistingIds = dedupeIds(input.associateAssetsIds ?? []);
+
+  if (validExistingIds.length && rawExistingIds.length === validExistingIds.length) {
+    return validExistingIds;
+  }
 
   const promptResolvedIds = dedupeIds(extractPromptAssetRefs(input.prompt).map((ref) => resolveAssetIdByRef(ref, projectAssets)));
   if (promptResolvedIds.length) {
-    const hasInvalidExistingIds = dedupeIds(input.associateAssetsIds ?? []).length !== validExistingIds.length;
-    const hasPromptConflict = promptResolvedIds.some((assetId, index) => validExistingIds[index] !== assetId);
-    if (hasInvalidExistingIds || hasPromptConflict || promptResolvedIds.length >= validExistingIds.length) {
-      return promptResolvedIds;
-    }
+    return promptResolvedIds;
   }
 
   const videoDescResolvedIds = dedupeIds(extractVideoDescAssetRefs(input.videoDesc).map((ref) => resolveAssetIdByRef(ref, projectAssets)));

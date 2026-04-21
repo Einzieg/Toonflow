@@ -90,10 +90,11 @@ export default router.post(
     if (duration > MAX_TRACK_DURATION_SECONDS) {
       return res.status(400).send(error(`当前轨道时长 ${duration}s，超过可生成上限 ${MAX_TRACK_DURATION_SECONDS}s，请先重新拆分分镜轨道`));
     }
-    let modeData: string[] = [];
-    if (typeof mode === "string" && mode.startsWith('["') && mode.endsWith('"]')) {
+    let modeData: unknown = undefined;
+    if (typeof mode === "string" && mode.trim().startsWith("[")) {
       try {
-        modeData = JSON.parse(mode);
+        const parsedMode = JSON.parse(mode);
+        if (Array.isArray(parsedMode)) modeData = parsedMode;
       } catch {}
     }
     //获取生成视频比例
@@ -160,7 +161,7 @@ export default router.post(
           {
             prompt,
             referenceList: referenceList.filter((item): item is NonNullable<typeof item> => item !== null),
-            mode: modeData.length > 0 ? modeData : mode,
+            mode: modeData ?? mode,
             duration,
             aspectRatio: (ratio?.videoRatio as "16:9" | "9:16") || "16:9",
             resolution,
@@ -181,7 +182,7 @@ export default router.post(
           .where("id", videoId)
           .update({
             state: "生成失败",
-            errorReason: error instanceof Error ? error.message : "未知错误",
+            errorReason: u.error(error).message,
           });
       }
     })();

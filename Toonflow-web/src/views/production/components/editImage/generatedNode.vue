@@ -128,6 +128,10 @@ function setGeneratedImage(imageUrl: string) {
   updateNodeData(props.id, { generatedImage: imageUrl });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function selectedFn() {
   selected.value = !selected.value;
 }
@@ -199,8 +203,28 @@ async function handleGenerate() {
       ratio: props.data.ratio,
       prompt: props.data.prompt,
       projectId: props.projectId,
+    }, {
+      timeout: 10 * 60 * 1000,
     });
-    setGeneratedImage(data.url);
+    if (data.url) {
+      setGeneratedImage(data.url);
+      return;
+    }
+
+    if (!data.taskId) throw new Error($t("workbench.production.editImage.generateFailed"));
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(3000);
+      const { data: task } = await axios.post("/production/editImage/generateFlowImage/poll", { taskId: data.taskId }, { timeout: 15000 });
+      if (task.state === "已完成" && task.url) {
+        setGeneratedImage(task.url);
+        return;
+      }
+      if (task.state === "生成失败") {
+        throw new Error(task.errorReason || $t("workbench.production.editImage.generateFailed"));
+      }
+    }
+    throw new Error($t("workbench.production.editImage.generateFailed"));
   } catch (e) {
     return window.$message.error((e as any)?.message || $t("workbench.production.editImage.generateFailed"));
   } finally {

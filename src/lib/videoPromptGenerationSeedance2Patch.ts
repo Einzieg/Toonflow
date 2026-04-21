@@ -1,4 +1,19 @@
 const seedance2SectionPattern = /### 三、Seedance 2\.0[\s\S]*?(?=### 四、Wan 2\.6)/;
+const videoPromptDocPresetStart = "<!-- TOONFLOW:DOC_VIDEO_PROMPT_PRESETS:START -->";
+const videoPromptDocPresetEnd = "<!-- TOONFLOW:DOC_VIDEO_PROMPT_PRESETS:END -->";
+
+const videoPromptDocPresetSection = `## 文档增强：通用镜头预设与通用推理
+
+来源：docs/通用 镜头预设.md、docs/通用 预设.md、docs/通用推理.md。以下规则适用于所有视频提示词模式。
+
+- 参考图必须使用当前系统分配的 @图N；@图N 依据资产和分镜图的真实输入顺序绑定，不能按编号臆断角色/场景/道具类型。
+- 文档中的 **@预设名** 只作为资产名映射规则理解；最终输出仍按当前模式要求使用 @图N、参考定义或纯文本，不输出 @角色库、@场景库、@物品库 或自造别名。
+- 多参考图镜头必须逐一绑定角色、场景、道具和分镜图；不要只引用第一张图，也不要让一个 @图N 代替多个资产。
+- 每个分镜都要从静态画面推理出视频动作轴：主动作、二级动作、微表情、身体姿态、焦点变化、镜头路径和情绪落点。
+- 单镜头内部按完整时长组织起幅状态、中段推进、收束落点；时间轴要覆盖 duration，不能整段只写一张静态图。
+- 镜头运动优先使用可执行类型：静止后轻推、推进/拉远、横移跟拍、升降、环绕、焦点转移、景别变化、手持轻晃、情绪化缓推。
+- 声音、环境、光影只能基于 videoDesc 已有信息或逻辑必需信息补充，禁止新增未出现角色、道具、场景、台词或剧情结果。
+`;
 
 export const seedance2PromptSection = `### 三、Seedance 2.0
 
@@ -137,8 +152,14 @@ export function patchVideoPromptGenerationSeedance2Section(prompt: string): stri
 export function patchVideoPromptGenerationSeedance2Section(prompt: null | undefined): null | undefined;
 export function patchVideoPromptGenerationSeedance2Section(prompt: string | null | undefined) {
   if (prompt == null) return prompt;
-  if (!prompt.includes("### 三、Seedance 2.0") || !prompt.includes("### 四、Wan 2.6")) {
-    return prompt;
+  let next = prompt;
+  if (next.includes("### 三、Seedance 2.0") && next.includes("### 四、Wan 2.6")) {
+    next = next.replace(seedance2SectionPattern, seedance2PromptSection);
   }
-  return prompt.replace(seedance2SectionPattern, seedance2PromptSection);
+
+  const section = `${videoPromptDocPresetStart}\n${videoPromptDocPresetSection.trim()}\n${videoPromptDocPresetEnd}`;
+  const sectionPattern = new RegExp(`${videoPromptDocPresetStart}[\\s\\S]*?${videoPromptDocPresetEnd}`, "m");
+  if (sectionPattern.test(next)) return next.replace(sectionPattern, section);
+  if (next.includes("## 执行流程")) return next.replace("## 执行流程", `${section}\n\n---\n\n## 执行流程`);
+  return `${next.trimEnd()}\n\n${section}\n`;
 }

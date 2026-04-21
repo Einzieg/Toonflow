@@ -338,20 +338,28 @@ class OSS {
    * @returns 缩略图 URL（已存在或生成成功）或原图 URL（生成失败时）
    */
   async getSmallImageUrl(userRelPath: string): Promise<string> {
+    const { relativePath, passthroughUrl } = this.resolvePathInput(userRelPath);
+    if (passthroughUrl) {
+      return passthroughUrl;
+    }
+    if (relativePath.startsWith("smallImage/")) {
+      return this.getFileUrl(relativePath);
+    }
+
     // 构造缩略图相对路径：在原路径的目录层级前插入 smallImage 目录
     // 例如：123/abc.jpg => smallImage/123/abc.jpg
-    const smallImageRelPath = `smallImage/${userRelPath.replace(/^[/\\]+/, "")}`;
+    const smallImageRelPath = `smallImage/${relativePath.replace(/^[/\\]+/, "")}`;
 
     if (await this.fileExists(smallImageRelPath)) {
       return this.getFileUrl(smallImageRelPath);
     }
 
     // 缩略图不存在：同步生成，生成失败则返回原图 URL
-    const originalUrl = await this.getFileUrl(userRelPath);
+    const originalUrl = await this.getFileUrl(relativePath);
 
     try {
       await this.ensureInit();
-      const srcAbsPath = resolveSafeLocalPath(userRelPath, this.rootDir);
+      const srcAbsPath = resolveSafeLocalPath(relativePath, this.rootDir);
       const dstAbsPath = resolveSafeLocalPath(smallImageRelPath, this.rootDir);
       await fs.mkdir(path.dirname(dstAbsPath), { recursive: true });
       await sharp(srcAbsPath)

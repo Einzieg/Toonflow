@@ -299,6 +299,8 @@ import { DialogPlugin } from "tdesign-vue-next";
 import promptEditor from "@/components/promptEditor.vue";
 import projectStore from "@/stores/project";
 
+const VIDEO_PROMPT_TIMEOUT = 5 * 60 * 1000;
+
 // ============================================================
 // 类型定义
 // ============================================================
@@ -1047,22 +1049,20 @@ const promptText = computed({
 });
 
 /** uploadBox 作为 promptEditor 的引用预览 */
-const references = computed(() =>{
+const references = computed(() => {
   function getFileTypeByExt(src: string | undefined): "image" | "video" | "audio" {
-  const ext = src?.split(".").pop()?.toLowerCase() ?? "";
-  if (["mp4", "webm", "mov", "avi", "mkv"].includes(ext)) return "video";
-  if (["mp3", "wav", "ogg", "aac", "flac", "m4a"].includes(ext)) return "audio";
-  return "image";
-}
- return uploadBox.value
+    const ext = src?.split(".").pop()?.toLowerCase() ?? "";
+    if (["mp4", "webm", "mov", "avi", "mkv"].includes(ext)) return "video";
+    if (["mp3", "wav", "ogg", "aac", "flac", "m4a"].includes(ext)) return "audio";
+    return "image";
+  }
+  return uploadBox.value
     .filter((item) => item.src)
     .map((item) => ({
       type: getFileTypeByExt(item.src) as "image" | "video" | "audio" | "text",
       src: item.src ?? "",
-    })),
-}
-
-);
+    }));
+});
 
 /** 提示词失焦时保存到后端 */
 function handlePromptBlur() {
@@ -1092,12 +1092,16 @@ async function genText() {
   }
   genTextLoadingMap.value[trackId] = true;
   try {
-    const { data } = await axios.post("/production/workbench/generateVideoPrompt", {
-      projectId: project.value?.id,
-      trackId,
-      info: info,
-      model: selectModel.value,
-    });
+    const { data } = await axios.post(
+      "/production/workbench/generateVideoPrompt",
+      {
+        projectId: project.value?.id,
+        trackId,
+        info: info,
+        model: selectModel.value,
+      },
+      { timeout: VIDEO_PROMPT_TIMEOUT },
+    );
     const targetTrack = trackList.value.find((item) => item.id === trackId);
     if (targetTrack) targetTrack.prompt = data;
   } catch (e) {
@@ -1140,12 +1144,16 @@ function batchGenText() {
       if (genTextLoadingMap.value[trackId]) return;
       genTextLoadingMap.value[trackId] = true;
       try {
-        const { data } = await axios.post("/production/workbench/generateVideoPrompt", {
-          projectId: project.value?.id,
-          trackId,
-          info,
-          model: selectModel.value,
-        });
+        const { data } = await axios.post(
+          "/production/workbench/generateVideoPrompt",
+          {
+            projectId: project.value?.id,
+            trackId,
+            info,
+            model: selectModel.value,
+          },
+          { timeout: VIDEO_PROMPT_TIMEOUT },
+        );
         const targetTrack = trackList.value.find((item) => item.id === trackId);
         if (targetTrack) targetTrack.prompt = data;
       } finally {

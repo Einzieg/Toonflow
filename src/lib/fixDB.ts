@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { Knex } from "knex";
 import db from "@/utils/db";
+import { patchProductionPromptPresetsFromDocs } from "@/lib/productionPromptPresetPatch";
 import { patchVideoPromptGenerationSeedance2Section } from "@/lib/videoPromptGenerationSeedance2Patch";
 import { transform } from "sucrase";
 import rawVendorData from "./vendor.json";
@@ -88,6 +89,7 @@ export default async (knex: Knex): Promise<void> => {
     }
   };
   await recoverMissingProjects(knex);
+  await patchProductionPromptPresetsFromDocs();
   //矫正因软件异常退出导致的状态不一致问题
   await db("o_novel").where("eventState", 0).update({
     eventState: -1,

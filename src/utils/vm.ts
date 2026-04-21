@@ -105,14 +105,8 @@ function isRetryablePollError(error: unknown) {
  * 压缩图片，目标字节数不高于 size
  */
 export async function zipImage(completeBase64: string, size: number): Promise<string> {
-  let quality = 80;
-  let buffer = Buffer.from(completeBase64.split(",")[1], "base64");
-  let output = await sharp(buffer).jpeg({ quality }).toBuffer();
-  while (output.length > size && quality > 10) {
-    quality -= 10;
-    output = await sharp(buffer).jpeg({ quality }).toBuffer();
-  }
-  return "data:image/jpeg;base64," + output.toString("base64");
+  const buffer = Buffer.from(completeBase64.split(",")[1], "base64");
+  return optimizeReferenceImage(buffer, size);
 }
 
 export async function zipImageResolution(completeBase64: string, width: number, height: number): Promise<string> {

@@ -136,6 +136,41 @@ async function urlToBase64(url: string, retries = 3, delay = 1000): Promise<stri
   }
   throw new Error("urlToBase64 failed");
 }
+
+function safeStringifyError(error: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(error, (_key, value) => {
+      if (typeof value === "object" && value !== null) {
+        if (seen.has(value)) return "[Circular]";
+        seen.add(value);
+      }
+      return value;
+    });
+  } catch {
+    return "";
+  }
+}
+
+function isUpstreamEmptyOutputError(error: unknown): boolean {
+  const errorText = [
+    error instanceof Error ? error.message : "",
+    typeof error === "object" && error !== null && "message" in error ? String((error as any).message ?? "") : "",
+    typeof error === "object" && error !== null && "code" in error ? String((error as any).code ?? "") : "",
+    safeStringifyError(error),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return errorText.includes("upstream_empty_output") || errorText.includes("upstream model returned empty output");
+}
+
+function getEmptyOutputFallbackModel(modelName: `${string}:${string}`): `${string}:${string}` | null {
+  const [vendorId, model] = modelName.split(/:(.+)/) as [string, string];
+  if (!["ds2api", "new-api"].includes(vendorId)) return null;
+  return `${vendorId}:${model === "gpt-5.2" ? "gpt-5.4" : "gpt-5.2"}`;
+}
+
 class AiText {
   private AiType: AiType | `${string}:${string}`;
   private think?: boolean;
@@ -145,38 +180,91 @@ class AiText {
     this.think = think;
     this.thinkLevel = thinkLevel;
   }
-  private async resolveModel(middleware?: any | any[]) {
+  private async resolveModel(
+    middleware?: any | any[],
+    modelKey: AiType | `${string}:${string}` = this.AiType,
+    think: boolean | undefined = this.think,
+    thinkLevel: 0 | 1 | 2 | 3 = this.thinkLevel,
+  ) {
     const switchAiDevTool = await u.db("o_setting").where("key", "switchAiDevTool").first();
-    const modelName = await resolveModelName(this.AiType);
+    const modelName = await resolveModelName(modelKey);
     const sdkFn = await getVendorTemplateFn("textRequest", modelName);
-    const baseModel = await sdkFn(this.think, this.thinkLevel);
+    const baseModel = await sdkFn(think, thinkLevel);
     const mws = [
       ...(switchAiDevTool?.value === "1" ? [devToolsMiddleware()] : []),
       ...(middleware ? (Array.isArray(middleware) ? middleware : [middleware]) : []),
     ];
     return mws.length > 0 ? wrapLanguageModel({ model: baseModel, middleware: mws.length === 1 ? mws[0] : mws }) : baseModel;
   }
-  async invoke(input: Omit<Parameters<typeof generateText>[0], "model">) {
-    const config = await getModelConfig(this.AiType);
-
+  private async generateWithModel(
+    input: Omit<Parameters<typeof generateText>[0], "model">,
+    modelKey: AiType | `${string}:${string}`,
+    think: boolean | undefined,
+    thinkLevel: 0 | 1 | 2 | 3,
+  ) {
+    const config = await getModelConfig(modelKey);
     return generateText({
       ...(input.tools && { stopWhen: stepCountIs(Object.keys(input.tools).length * 50) }),
       ...input,
-      model: await this.resolveModel(),
+      model: await this.resolveModel(undefined, modelKey, think, thinkLevel),
       ...(config?.temperature && { temperature: config.temperature }),
       ...(config?.maxOutputTokens && { maxOutputTokens: config.maxOutputTokens }),
     } as Parameters<typeof generateText>[0]);
   }
-  async stream(input: Omit<Parameters<typeof streamText>[0], "model">) {
-    const config = await getModelConfig(this.AiType);
 
+  private async streamWithModel(
+    input: Omit<Parameters<typeof streamText>[0], "model">,
+    modelKey: AiType | `${string}:${string}`,
+    think: boolean | undefined,
+    thinkLevel: 0 | 1 | 2 | 3,
+  ) {
+    const config = await getModelConfig(modelKey);
     return streamText({
       ...(input.tools && { stopWhen: stepCountIs(Object.keys(input.tools).length * 50) }),
       ...input,
-      model: await this.resolveModel(extractReasoningMiddleware({ tagName: "reasoning_content", separator: "\n" })),
+      model: await this.resolveModel(extractReasoningMiddleware({ tagName: "reasoning_content", separator: "\n" }), modelKey, think, thinkLevel),
       ...(config?.temperature && { temperature: config.temperature }),
       ...(config?.maxOutputTokens && { maxOutputTokens: config.maxOutputTokens }),
     } as Parameters<typeof streamText>[0]);
+  }
+
+  private async *retryEmptyOutputStream(
+    fullStream: AsyncIterable<any>,
+    input: Omit<Parameters<typeof streamText>[0], "model">,
+    primaryModelName: `${string}:${string}`,
+  ) {
+    try {
+      for await (const chunk of fullStream) yield chunk;
+    } catch (error) {
+      const fallbackModel = getEmptyOutputFallbackModel(primaryModelName);
+      if (!fallbackModel || !isUpstreamEmptyOutputError(error)) throw error;
+
+      console.warn(`[AiText] ${primaryModelName} returned empty output, retrying with ${fallbackModel}`);
+      const retryResult = await this.streamWithModel(input, fallbackModel, false, 0);
+      for await (const chunk of retryResult.fullStream) yield chunk;
+    }
+  }
+
+  async invoke(input: Omit<Parameters<typeof generateText>[0], "model">) {
+    const primaryModelName = await resolveModelName(this.AiType);
+    try {
+      return await this.generateWithModel(input, this.AiType, this.think, this.thinkLevel);
+    } catch (error) {
+      const fallbackModel = getEmptyOutputFallbackModel(primaryModelName);
+      if (!fallbackModel || !isUpstreamEmptyOutputError(error)) throw error;
+
+      console.warn(`[AiText] ${primaryModelName} returned empty output, retrying with ${fallbackModel}`);
+      return this.generateWithModel(input, fallbackModel, false, 0);
+    }
+  }
+
+  async stream(input: Omit<Parameters<typeof streamText>[0], "model">) {
+    const primaryModelName = await resolveModelName(this.AiType);
+    const result = await this.streamWithModel(input, this.AiType, this.think, this.thinkLevel);
+    return {
+      ...result,
+      fullStream: this.retryEmptyOutputStream(result.fullStream, input, primaryModelName),
+    };
   }
 }
 
