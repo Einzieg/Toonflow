@@ -261,10 +261,14 @@ class AiText {
   async stream(input: Omit<Parameters<typeof streamText>[0], "model">) {
     const primaryModelName = await resolveModelName(this.AiType);
     const result = await this.streamWithModel(input, this.AiType, this.think, this.thinkLevel);
-    return {
-      ...result,
-      fullStream: this.retryEmptyOutputStream(result.fullStream, input, primaryModelName),
-    };
+    const fullStream = this.retryEmptyOutputStream(result.fullStream, input, primaryModelName);
+    return Object.create(result, {
+      fullStream: {
+        configurable: true,
+        enumerable: true,
+        value: fullStream,
+      },
+    });
   }
 }
 
