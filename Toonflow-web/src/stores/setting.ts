@@ -1,6 +1,5 @@
 function getDefaultWebBaseUrl() {
-  if (typeof window === "undefined") return "/api";
-  return `${window.location.origin}/api`;
+  return "/api";
 }
 
 export default defineStore(
@@ -37,5 +36,5 @@ export default defineStore(
 
     return { showSetting, baseUrl, otherSetting, themeSetting, language, activeMenu, isElectron, canvasWheelEvent, needUpdate };
   },
-  { persist: { pick: ["baseUrl", "otherSetting", "themeSetting", "language"] } },
+  { persist: { pick: ["otherSetting", "themeSetting", "language"] } },
 );

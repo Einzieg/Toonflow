@@ -37,39 +37,9 @@ onBeforeMount(() => {
 
 // 初始化主题
 onMounted(() => {
-  normalizeWebBaseUrl();
+  baseUrl.value = "/api";
   getPort();
 });
-
-function isLoopbackHost(hostname: string) {
-  const normalized = hostname.replace(/^\[|\]$/g, "");
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
-}
-
-function getCurrentApiBaseUrl() {
-  if (typeof window === "undefined") return "/api";
-  return `${window.location.origin}/api`;
-}
-
-function normalizeWebBaseUrl() {
-  if (typeof window === "undefined" || isElectron.value) return;
-
-  const normalized = String(baseUrl.value || "").trim();
-  if (!normalized) {
-    baseUrl.value = getCurrentApiBaseUrl();
-    return;
-  }
-
-  try {
-    const currentUrl = new URL(window.location.href);
-    const resolvedUrl = new URL(normalized, currentUrl.origin);
-    if (!isLoopbackHost(currentUrl.hostname) && isLoopbackHost(resolvedUrl.hostname)) {
-      baseUrl.value = getCurrentApiBaseUrl();
-    }
-  } catch {
-    baseUrl.value = getCurrentApiBaseUrl();
-  }
-}
 
 async function handleLinkClick(event: MouseEvent) {
   event.preventDefault();

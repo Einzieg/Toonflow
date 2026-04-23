@@ -16,6 +16,15 @@
         <div class="imageToolsWrap" v-if="item.sources == 'storyboard' && item.index">
           {{ `P${item.index + 1}` }}
         </div>
+        <button
+          v-if="isPreviewableImage(item)"
+          type="button"
+          class="previewBtn c"
+          :title="$t('components.imageTools.preview')"
+          @mousedown.stop
+          @click.stop.prevent="handlePreviewImage(item)">
+          <i-expand-text-input size="14" />
+        </button>
         <div class="clearBtn" @click="splitImage(index)">
           <i-close size="12" />
         </div>
@@ -40,6 +49,15 @@
           <div class="imageToolsWrap" v-if="imageList?.[index]?.sources == 'storyboard' && imageList?.[index]?.index">
             {{ `P${imageList[index]?.index + 1}` }}
           </div>
+          <button
+            v-if="isPreviewableImage(imageList?.[index])"
+            type="button"
+            class="previewBtn c"
+            :title="$t('components.imageTools.preview')"
+            @mousedown.stop
+            @click.stop.prevent="handlePreviewImage(imageList[index])">
+            <i-expand-text-input size="14" />
+          </button>
           <div class="clearBtn" @click.stop="clearImage(index)">
             <i-close size="12" />
           </div>
@@ -86,6 +104,7 @@ import { ref } from "vue";
 import "@/views/production/components/workbench/type/type";
 import assetsCheck, { type AssetType, type ClipMediaType } from "@/utils/assetsCheck";
 import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
+import { openImagePreview } from "@/utils/imagePreviewOverlay";
 
 const props = defineProps<{
   mode: VideoMode;
@@ -166,6 +185,14 @@ function getItemPreviewSrc(item?: UploadItem) {
 
 function getStoryboardPreviewSrc(item: StoryboardItem) {
   return getPreviewImageSrc((item as any).thumbSrc, item.src, { width: 320, format: "webp" });
+}
+function isPreviewableImage(item?: UploadItem) {
+  return !!item?.src && item.fileType !== "video" && item.fileType !== "audio";
+}
+function handlePreviewImage(item?: UploadItem) {
+  const src = item?.src;
+  if (!src || item.fileType === "video" || item.fileType === "audio") return;
+  openImagePreview(src);
 }
 /** 根据混合模式推导当前允许的 clip 媒体类型 */
 const mixedClipMediaTypes = computed<ClipMediaType[]>(() => {
@@ -289,6 +316,28 @@ function splitImage(index: number) {
       height: 100%;
       object-fit: cover;
       border-radius: 8px;
+    }
+    .previewBtn {
+      position: absolute;
+      left: 4px;
+      bottom: 4px;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.62);
+      color: #fff;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      &:hover {
+        background: rgba(0, 0, 0, 0.85);
+      }
+    }
+    &:hover .previewBtn {
+      display: flex;
     }
     .clearBtn {
       position: absolute;

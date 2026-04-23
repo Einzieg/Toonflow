@@ -286,10 +286,12 @@ function makeProductionAgentStore(projectId: string) {
       return data;
     }
     async function batchGenerateAssets(allIds: number[]) {
+      const uniqueIds = Array.from(new Set(allIds.filter((id): id is number => Number.isInteger(id))));
+      if (!uniqueIds.length) return [];
       flowData.value.assets.forEach((asset) => {
         if (asset.derive) {
           asset.derive.forEach((derive) => {
-            if (allIds.includes(derive.id)) {
+            if (uniqueIds.includes(derive.id)) {
               derive.state = "生成中" as "未生成" | "生成中" | "已完成" | "生成失败";
             }
           });
@@ -297,12 +299,12 @@ function makeProductionAgentStore(projectId: string) {
       });
       try {
         const { data } = await axios.post("/production/assets/batchGenerateAssetsImage", {
-          assetIds: allIds,
+          assetIds: uniqueIds,
           projectId: projectId,
           scriptId: episodesId.value,
           concurrentCount: settingStore().otherSetting.assetsBatchGenereateSize,
         });
-        if (data) {
+        if (Array.isArray(data)) {
           data.forEach((record: { id: number; state: "未生成" | "生成中" | "已完成" | "生成失败"; src: string; thumbSrc?: string }) => {
             flowData.value.assets.forEach((asset) => {
               if (asset.derive) {
@@ -317,7 +319,10 @@ function makeProductionAgentStore(projectId: string) {
           });
         }
         return data;
-      } catch (e) { }
+      } catch (e) {
+        console.error("[batchGenerateAssets] error", e);
+        return [];
+      }
     }
     const assetsNotStateImageIds = computed(() => {
       const ids: number[] = [];

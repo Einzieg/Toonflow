@@ -1,14 +1,6 @@
 <template>
   <div class="loginPage" :style="{ height: isElectron ? 'calc(100vh - 32px)' : '100vh' }">
     <div class="formBox">
-      <!-- 设置弹窗 -->
-      <t-dialog v-model:visible="showSettingModal" :header="$t('login.settings')" @confirm="handleSaveSetting" :width="400">
-        <t-form label-width="80px" labelAlign="top">
-          <t-form-item :label="$t('login.requestAddress')">
-            <t-input v-model="tempBaseUrl" placeholder="https://your-domain/api" />
-          </t-form-item>
-        </t-form>
-      </t-dialog>
       <div class="logoBox fc">
         <div class="logoImg"></div>
         <div class="fc c">
@@ -34,17 +26,11 @@
         </template>
       </t-button>
     </t-dropdown>
-    <t-button shape="circle" theme="primary" size="large" @click="showSettingModal = true">
-      <template #icon>
-        <i-setting-two theme="outline" size="20" />
-      </template>
-    </t-button>
   </div>
 </template>
 
 <script setup>
 import Router from "@/router/index.ts";
-import logo from "@/assets/logo.png";
 import axios from "@/utils/axios";
 import settingStore from "@/stores/setting";
 import { storeToRefs } from "pinia";
@@ -58,18 +44,7 @@ const handleChangeLang = async (data) => {
   await setLocale(data.value);
 };
 
-const store = settingStore();
-const { baseUrl, isElectron } = storeToRefs(store);
-
-const showSettingModal = ref(false);
-const tempBaseUrl = ref(baseUrl.value);
-
-// 保存设置
-const handleSaveSetting = () => {
-  baseUrl.value = tempBaseUrl.value;
-  showSettingModal.value = false;
-  window.$message.success($t("login.settingsSaved"));
-};
+const { isElectron } = storeToRefs(settingStore());
 const state = ref({
   show: true,
   loginLoading: false,

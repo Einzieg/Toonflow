@@ -8,15 +8,11 @@
       </t-button>
     </t-tooltip>
     <t-tooltip theme="primary" :content="$t('components.imageTools.preview')" :placement="placement">
-      <t-image-viewer v-model:visible="previewVisible" :images="[props.src]">
-        <template #trigger>
-          <t-button variant="outline" size="small" shape="square" @click.stop="handlePreview">
-            <template #icon>
-              <i-expand-text-input size="16" />
-            </template>
-          </t-button>
+      <t-button variant="outline" size="small" shape="square" @mousedown.stop @click.stop="handlePreview">
+        <template #icon>
+          <i-expand-text-input size="16" />
         </template>
-      </t-image-viewer>
+      </t-button>
     </t-tooltip>
     <t-tooltip theme="primary" :content="$t('components.imageTools.download')" :placement="placement">
       <t-button variant="outline" size="small" shape="square" @click.stop="handleDownload">
@@ -29,6 +25,8 @@
 </template>
 
 <script setup lang="ts">
+import { openImagePreview } from "@/utils/imagePreviewOverlay";
+
 const props = defineProps<{
   src: string;
   placement?: string;
@@ -53,10 +51,9 @@ const positionStyle = computed<any>(function () {
   return map[position];
 });
 
-const previewVisible = ref(false);
-
 function handlePreview() {
-  previewVisible.value = true;
+  if (!props.src) return;
+  openImagePreview(props.src);
 }
 
 async function handleCopy() {
@@ -131,5 +128,14 @@ async function handleDownload() {
 .imageTools {
   gap: 4px;
   display: flex;
+  align-items: center;
+
+  :deep(.t-button) {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    padding: 0;
+  }
 }
 </style>
