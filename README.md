@@ -1,3 +1,6 @@
+# 该分支为自用魔改版，修复了部分上游仓库的bug
+# 上游仓库的更新可能会被忽略或以其它方式更新
+
 <p>
   <a href="https://github.com/HBAI-Ltd/Toonflow-app">
     <img src="https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub" />
