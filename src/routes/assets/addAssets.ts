@@ -15,9 +15,10 @@ export default router.post(
     projectId: z.number(),
     remark: z.string().optional().nullable(),
     prompt: z.string().optional().nullable(),
+    volcengineAssetUri: z.string().optional().nullable(),
   }),
   async (req, res) => {
-    const { name, describe, type, projectId, remark, prompt } = req.body;
+    const { name, describe, type, projectId, remark, prompt, volcengineAssetUri } = req.body;
     await u.db("o_assets").insert({
       name,
       describe,
@@ -25,6 +26,7 @@ export default router.post(
       projectId,
       remark,
       prompt,
+      volcengineAssetUri: volcengineAssetUri?.trim() || null,
       startTime: Date.now(),
     });
     res.status(200).send(success({ message: "新增资产成功" }));

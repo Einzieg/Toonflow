@@ -2,6 +2,7 @@ import { transform } from "sucrase";
 import fs from "fs";
 import path from "path";
 import u from "@/utils";
+import { normalizeVideoModelDurationMap } from "@/utils/storyboardTrack";
 
 export function writeCode(id: string | number, tsCode: string) {
   const rootDir = u.getPath("vendor")
@@ -31,7 +32,7 @@ export async function getModelList(id: string): Promise<Array<any>> {
   for (const m of combined) {
     map.set(m.modelName, m);
   }
-  return [...map.values()];
+  return [...map.values()].map((model) => normalizeVideoModelDurationMap(model));
 }
 
 export function getVendor(id: string) {

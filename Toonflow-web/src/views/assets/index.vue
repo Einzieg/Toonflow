@@ -122,6 +122,12 @@
                             </template>
                             {{ $t("workbench.assets.generate") }}
                           </t-button>
+                          <t-button theme="primary" variant="text" :disabled="isGenerating(subRow.id)" @click="handleUploadAssetImage(subRow)">
+                            <template #icon>
+                              <t-icon name="upload" />
+                            </template>
+                            {{ $t("workbench.assets.uploadImage") }}
+                          </t-button>
                           <t-button theme="primary" variant="text" @click="handleEdit(subRow)">
                             <template #icon>
                               <t-icon name="edit" />
@@ -195,6 +201,12 @@
                         <i-magic :size="18" />
                       </template>
                       {{ $t("workbench.assets.generate") }}
+                    </t-button>
+                    <t-button theme="primary" variant="text" :disabled="isGenerating(row.id)" @click="handleUploadAssetImage(row)">
+                      <template #icon>
+                        <t-icon name="upload" />
+                      </template>
+                      {{ $t("workbench.assets.uploadImage") }}
                     </t-button>
                     <t-button theme="primary" variant="text" @click="handleEdit(row)">
                       <template #icon>
@@ -375,6 +387,7 @@
         </t-tab-panel>
       </t-tabs>
     </div>
+    <input ref="assetImageUploadInput" class="assetImageUploadInput" type="file" accept="image/*" @change="handleAssetImageFileChange" />
     <addAssets
       v-model="addAssetsShow"
       :type="assetOptions"
@@ -537,6 +550,7 @@ interface Asset {
   prompt: string;
   describe: string;
   remark: string;
+  volcengineAssetUri?: string | null;
   src: string;
   type: "role" | "tool" | "scene" | "clip"; // "角色" | "道具" | "场景" | "素材"
   state: string;
@@ -615,13 +629,14 @@ function selectAssetOptions(value: TabValue) {
   pagination.value.page = 1;
   loadCurrentTabData();
 }
-const formData = ref<{ id: number; name: string; describe: string; remark: string; src?: string; prompt: string }>({
+const formData = ref<{ id: number; name: string; describe: string; remark: string; src?: string; prompt: string; volcengineAssetUri?: string | null }>({
   id: 0,
   name: "",
   describe: "",
   remark: "",
   src: "",
   prompt: "",
+  volcengineAssetUri: "",
 });
 const addAssetsShow = ref(false);
 // 新增
@@ -665,6 +680,7 @@ async function handleAdd(type: string) {
       describe: "",
       remark: "",
       prompt: "",
+      volcengineAssetUri: "",
     };
   }
 }
@@ -864,6 +880,13 @@ const columns: TableProps["columns"] = [
     cell: "prompt",
   },
   {
+    colKey: "volcengineAssetUri",
+    title: $t("workbench.assets.colVolcengineAssetUri"),
+    width: 180,
+    align: "left",
+    ellipsis: true,
+  },
+  {
     colKey: "describe",
     title: $t("workbench.assets.colDescribe"),
     width: 200,
@@ -924,6 +947,13 @@ const subColumns: TableProps["columns"] = [
     align: "left",
     ellipsis: true,
     cell: "prompt",
+  },
+  {
+    colKey: "volcengineAssetUri",
+    title: $t("workbench.assets.colVolcengineAssetUri"),
+    width: 180,
+    align: "left",
+    ellipsis: true,
   },
   {
     colKey: "describe",
@@ -1118,6 +1148,57 @@ function generate(row: any) {
   };
   generateImageShow.value = true;
 }
+
+const assetImageUploadInput = ref<HTMLInputElement | null>(null);
+const uploadingAsset = ref<Asset | null>(null);
+
+function handleUploadAssetImage(row: Asset) {
+  if (!["role", "tool", "scene"].includes(row.type)) return;
+  uploadingAsset.value = row;
+  if (assetImageUploadInput.value) {
+    assetImageUploadInput.value.value = "";
+    assetImageUploadInput.value.click();
+  }
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("读取图片失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleAssetImageFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  const target = uploadingAsset.value;
+  input.value = "";
+  if (!file || !target) return;
+  if (!file.type.startsWith("image/")) {
+    window.$message.error($t("workbench.assets.selectImageFile"));
+    uploadingAsset.value = null;
+    return;
+  }
+
+  try {
+    const base64 = await readFileAsDataUrl(file);
+    await axios.post("/assets/saveAssets", {
+      id: target.id,
+      base64,
+      type: target.type,
+      prompt: target.prompt,
+      projectId: project.value?.id,
+    });
+    window.$message.success($t("workbench.assets.assetImageUploadSuccess"));
+    await getFilteredData(assetOptions.value);
+  } catch (e: any) {
+    window.$message.error(e?.message || $t("workbench.assets.assetImageUploadFailed"));
+  } finally {
+    uploadingAsset.value = null;
+  }
+}
 // 编辑
 function handleEdit(row: any) {
   console.log(row);
@@ -1129,6 +1210,7 @@ function handleEdit(row: any) {
   } else {
     formData.value = {
       ...row,
+      volcengineAssetUri: row.volcengineAssetUri || "",
     };
     addAssetsShow.value = true;
   }
@@ -1324,6 +1406,10 @@ watch(generatingData, (val) => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+
+  .assetImageUploadInput {
+    display: none;
+  }
 
   .data {
     flex: 1;

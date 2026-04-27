@@ -15,14 +15,16 @@ export default router.post(
     describe: z.string(),
     remark: z.string().optional().nullable(),
     prompt: z.string().optional().nullable(),
+    volcengineAssetUri: z.string().optional().nullable(),
   }),
   async (req, res) => {
-    const { id, name, describe, remark, prompt } = req.body;
+    const { id, name, describe, remark, prompt, volcengineAssetUri } = req.body;
     await u.db("o_assets").where({ id }).update({
       name,
       describe,
       remark,
       prompt,
+      volcengineAssetUri: volcengineAssetUri?.trim() || null,
     });
     res.status(200).send(success({ message: "更新资产成功" }));
   },

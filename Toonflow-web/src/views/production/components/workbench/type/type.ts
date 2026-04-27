@@ -7,6 +7,7 @@ interface UploadItemBase {
   id: number | null;
   src?: string;
   prompt?: string;
+  volcengineAssetUri?: string | null;
 }
 
 interface UploadItemStoryboard extends UploadItemBase {
@@ -65,6 +66,7 @@ interface TrackMediaBase {
   src: string;
   id?: number;
   prompt?: string;
+  volcengineAssetUri?: string | null;
   fileType: "image" | "video" | "audio";
   slotType?: Type; // 本地保存时记录的 slot 类型，用于切换轨道时精确还原位置
   index?: number;

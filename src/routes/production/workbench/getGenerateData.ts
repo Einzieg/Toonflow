@@ -29,6 +29,7 @@ interface TrackMedia {
   id?: number;
   fileType: "image" | "video" | "audio";
   videoDesc?: string;
+  volcengineAssetUri?: string | null;
 }
 
 interface TrackItem {
@@ -101,11 +102,12 @@ export default router.post(
       const assetDatas = await u
         .db("o_assets2Storyboard")
         .leftJoin("o_assets", "o_assets2Storyboard.assetId", "o_assets.id")
+        .leftJoin({ parentAsset: "o_assets" }, "o_assets.assetsId", "parentAsset.id")
         .leftJoin("o_image", "o_image.id", "o_assets.imageId")
         .whereIn("o_assets2Storyboard.storyboardId", storyIds as number[])
         .orderBy("o_assets2Storyboard.storyboardId", "asc")
         .orderBy("o_assets2Storyboard.rowid", "asc")
-        .select("o_assets.*", "o_image.filePath", "o_assets2Storyboard.storyboardId");
+        .select("o_assets.*", "o_image.filePath", "o_assets2Storyboard.storyboardId", "parentAsset.volcengineAssetUri as parentVolcengineAssetUri");
 
       await Promise.all(
         assetDatas.map(async (i) => {
@@ -117,6 +119,7 @@ export default router.post(
             fileType: "image" as const,
             sources: "assets",
             src: i.filePath ? await u.oss.getSmallImageUrl(i.filePath) : "",
+            volcengineAssetUri: i.volcengineAssetUri || i.parentVolcengineAssetUri || null,
           };
           const sid = i.storyboardId as number;
           if (!otherDataMap[sid]) otherDataMap[sid] = [];
@@ -150,8 +153,8 @@ export default router.post(
             seenAssetIds.add(a.id);
             return true;
           });
-          const hasImageAssetData = uniqueAssets.filter((i) => i.src);
-          const notHasImageAssetData = uniqueAssets.filter((i) => !i.src);
+          const hasImageAssetData = uniqueAssets.filter((i) => i.src || i.volcengineAssetUri);
+          const notHasImageAssetData = uniqueAssets.filter((i) => !i.src && !i.volcengineAssetUri);
 
           return [...hasImageAssetData, ...storyboardMedias, ...notHasImageAssetData];
         })(),

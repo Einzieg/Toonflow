@@ -11,6 +11,7 @@ const deriveAssetSchema = z.object({
   name: z.string().describe("衍生资产名称"),
   desc: z.string().describe("衍生资产描述"),
   src: z.string().nullable().describe("衍生资产资源路径"),
+  volcengineAssetUri: z.string().nullable().optional().describe("火山引擎官方虚拟人像URI，仅真人/角色视频生成阶段使用"),
   state: z.enum(["未生成", "生成中", "已完成", "生成失败"]).describe("衍生资产生成状态"),
   type: z.enum(["role", "tool", "scene", "clip"]).describe("衍生资产类型"),
 });
@@ -20,6 +21,7 @@ export const assetItemSchema = z.object({
   type: z.enum(["role", "tool", "scene", "clip"]).describe("资产类型"),
   prompt: z.string().describe("生成提示词"),
   desc: z.string().describe("资产描述"),
+  volcengineAssetUri: z.string().nullable().optional().describe("火山引擎官方虚拟人像URI，仅真人/角色视频生成阶段使用"),
   derive: z.array(deriveAssetSchema).describe("衍生资产列表"),
 });
 const storyboardSchema = z.object({
@@ -124,7 +126,7 @@ export default (toolCpnfig: ToolConfig) => {
         const thinking = msg.thinking("正在操作资产...");
         const { projectId, scriptId } = resTool.data;
         const startTime = Date.now();
-        const parentAssets = await u.db("o_assets").where("id", deriveAsset.assetsId).select("id", "type").first();
+        const parentAssets = await u.db("o_assets").where("id", deriveAsset.assetsId).select("id", "type", "volcengineAssetUri").first();
         if (!parentAssets) return "关联的资产不存在";
 
         const data = {
@@ -134,6 +136,7 @@ export default (toolCpnfig: ToolConfig) => {
           name: deriveAsset.name,
           type: parentAssets.type,
           describe: deriveAsset.desc,
+          volcengineAssetUri: parentAssets.type === "role" ? (parentAssets.volcengineAssetUri ?? null) : null,
           startTime,
         };
         if (deriveAsset.id) {

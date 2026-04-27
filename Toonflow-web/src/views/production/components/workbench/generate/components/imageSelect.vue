@@ -8,6 +8,11 @@
             <template #overlayContent></template>
           </t-image>
         </template>
+        <template v-else-if="item.volcengineAssetUri">
+          <t-tooltip theme="primary" :content="item.volcengineAssetUri">
+            <span class="virtualAssetMark">火</span>
+          </t-tooltip>
+        </template>
         <template v-else>
           <t-tooltip theme="primary" :content="item?.prompt || ''">
             <span style="font-size: 20px">文</span>
@@ -40,6 +45,11 @@
         <div v-if="!isEmptySlot(imageList?.[index])" style="flex: 1" class="ac">
           <template v-if="imageList?.[index]?.src">
             <img class="uploadPreview" :src="getItemPreviewSrc(imageList[index])" loading="lazy" decoding="async" />
+          </template>
+          <template v-else-if="imageList?.[index]?.volcengineAssetUri">
+            <t-tooltip theme="primary" :content="imageList?.[index]?.volcengineAssetUri || ''">
+              <span class="virtualAssetMark">火</span>
+            </t-tooltip>
           </template>
           <template v-else>
             <t-tooltip theme="primary" :content="imageList?.[index]?.prompt || ''">
@@ -223,6 +233,7 @@ function handleMixedAdd(slot: "start" | "end" | "" = "") {
           src: asset.src,
           id: asset.id,
           prompt: asset.prompt,
+          volcengineAssetUri: asset.volcengineAssetUri,
         };
       });
       if (slot === "start" || slot === "end") {
@@ -316,6 +327,18 @@ function splitImage(index: number) {
       height: 100%;
       object-fit: cover;
       border-radius: 8px;
+    }
+    .virtualAssetMark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: var(--td-brand-color-light);
+      color: var(--td-brand-color);
+      font-size: 18px;
+      font-weight: 700;
     }
     .previewBtn {
       position: absolute;

@@ -26,6 +26,11 @@
               :autosize="{ minRows: 3, maxRows: 5 }"
               :placeholder="$t('workbench.assets.add.promptPh')"></t-textarea>
           </t-form-item>
+          <t-form-item :label="$t('workbench.assets.add.volcengineAssetUri')" name="volcengineAssetUri" v-if="props.type === 'role'">
+            <t-input
+              v-model="props.formData.volcengineAssetUri"
+              :placeholder="$t('workbench.assets.add.volcengineAssetUriPh')"></t-input>
+          </t-form-item>
         </t-form>
       </div>
     </t-dialog>
@@ -45,6 +50,7 @@ const props = defineProps<{
     describe: string;
     remark: string;
     prompt: string;
+    volcengineAssetUri?: string | null;
   };
 }>();
 const addAssetsShow = defineModel<boolean>({
@@ -70,6 +76,7 @@ function onConfirm() {
             describe: props.formData.describe,
             remark: props.formData.remark,
             prompt: props.formData.prompt,
+            volcengineAssetUri: props.formData.volcengineAssetUri,
           })
           .then(() => {
             window.$message.success($t("workbench.assets.add.updateSuccess"));
@@ -85,6 +92,7 @@ function onConfirm() {
             type: props.type,
             projectId: project.value?.id,
             prompt: props.formData.prompt,
+            volcengineAssetUri: props.formData.volcengineAssetUri,
           })
           .then(() => {
             window.$message.success($t("workbench.assets.add.addSuccess"));

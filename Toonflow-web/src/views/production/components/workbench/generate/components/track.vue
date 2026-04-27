@@ -47,7 +47,7 @@
             </div>
           </div>
           <!-- 无选中视频时展示参考素材缩略图 -->
-          <div class="thumbGroup" v-else-if="track.medias.some((m) => m.src)">
+          <div class="thumbGroup" v-else-if="track.medias.some((m) => m.src || m.volcengineAssetUri)">
             <template v-for="(m, i) in track.medias" :key="i">
               <template v-if="m.src">
                 <img
@@ -62,6 +62,7 @@
                   <i-video v-else size="24" />
                 </div>
               </template>
+              <div v-else-if="m.volcengineAssetUri" class="thumb placeholder c virtualThumb">火</div>
             </template>
           </div>
           <span v-else class="emptyTrack">{{ $t("workbench.generate.emptyTrack", { index: index + 1 }) }}</span>
@@ -325,15 +326,17 @@ function batchGenText() {
  */
 function getTrackUploadInfo(track: TrackItem, filterEmpty = false) {
   const activeTrackId = trackList.value[activeTrackIndex.value]?.id;
+  const isSeedance2 = String(props.modelParmas.model || "").toLowerCase().includes("seedance-2-0");
+  const isUsableReference = (item: UploadItem | TrackMedia) => Boolean(item.src || item.volcengineAssetUri || (isSeedance2 && item.sources === "assets" && item.id));
 
   if (track.id === activeTrackId) {
     const items = props.imageList as UploadItem[];
-    return (filterEmpty ? items.filter((item) => Boolean(item.src)) : items).map(({ id, sources }) => ({
+    return (filterEmpty ? items.filter((item) => isUsableReference(item)) : items).map(({ id, sources }) => ({
       id,
       sources: (sources ?? "storyboard") as string,
     }));
   }
-  return track.medias.filter((m) => !filterEmpty || Boolean(m.src)).map(({ id, sources }) => ({ id, sources: (sources ?? "storyboard") as string }));
+  return track.medias.filter((m) => !filterEmpty || isUsableReference(m)).map(({ id, sources }) => ({ id, sources: (sources ?? "storyboard") as string }));
 }
 /** 批量为已勾选轨道生成视频 */
 function batchGenVideo() {
@@ -492,6 +495,11 @@ watch(
           background: var(--td-bg-color-secondarycontainer);
           color: var(--td-text-color-placeholder);
           font-size: 12px;
+        }
+        .virtualThumb {
+          background: var(--td-brand-color-light);
+          color: var(--td-brand-color);
+          font-weight: 700;
         }
       }
       .emptyTrack {

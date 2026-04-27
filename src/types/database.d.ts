@@ -58,6 +58,7 @@ export interface o_assets {
   'scriptId'?: number | null;
   'startTime'?: number | null;
   'type'?: string | null;
+  'volcengineAssetUri'?: string | null;
 }
 export interface o_assets2Storyboard {
   'assetId'?: number;

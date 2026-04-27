@@ -136,6 +136,7 @@ export default router.post(
               desc: item.describe ?? "",
               src: assetImage.src,
               thumbSrc: assetImage.thumbSrc,
+              volcengineAssetUri: item.volcengineAssetUri ?? null,
               state: item.state ?? "未生成",
               errorReason: item?.errorReason ?? "",
               derive: await Promise.all(
@@ -153,6 +154,7 @@ export default router.post(
                       desc: child.describe ?? "",
                       src: childImage.src,
                       thumbSrc: childImage.thumbSrc,
+                      volcengineAssetUri: child.volcengineAssetUri ?? item.volcengineAssetUri ?? null,
                       state: child.state ?? "未生成",
                     };
                   }),
@@ -184,6 +186,7 @@ export default router.post(
               desc: item.describe ?? "",
               src: assetImage.src,
               thumbSrc: assetImage.thumbSrc,
+              volcengineAssetUri: item.volcengineAssetUri ?? null,
               state: item.state ?? "未生成",
               errorReason: item?.errorReason ?? "",
               flowId: item.flowId,
@@ -202,6 +205,7 @@ export default router.post(
                       desc: child.describe ?? "",
                       src: childImage.src,
                       thumbSrc: childImage.thumbSrc,
+                      volcengineAssetUri: child.volcengineAssetUri ?? item.volcengineAssetUri ?? null,
                       state: child.state ?? "未生成",
                       errorReason: child?.errorReason ?? "",
                       flowId: child.flowId,

@@ -1,4 +1,5 @@
 export const MAX_TRACK_DURATION_SECONDS = 15;
+export const FIXED_SEEDANCE_VIDEO_DURATION_SECONDS = 15;
 
 type Nullable<T> = T | null | undefined;
 
@@ -36,6 +37,27 @@ export function normalizeStoryboardDuration(rawDuration: Nullable<number | strin
 export function normalizeStoryboardTrack(track: Nullable<string>): string {
   const normalized = String(track ?? "").trim();
   return normalized || "__AUTO__";
+}
+
+export function isFixedDurationSeedanceVideoModel(model?: Nullable<string>, displayName?: Nullable<string>): boolean {
+  const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
+  return value.includes("seedance") && (value.includes("seedance-2-0") || value.includes("seedance-2.0") || value.includes("seedance2.0"));
+}
+
+export function resolveVideoGenerationDuration(model: Nullable<string>, duration: Nullable<number | string>, displayName?: Nullable<string>): number {
+  if (isFixedDurationSeedanceVideoModel(model, displayName)) return FIXED_SEEDANCE_VIDEO_DURATION_SECONDS;
+  return normalizeStoryboardDuration(duration);
+}
+
+export function normalizeVideoModelDurationMap<T extends { name?: string; modelName?: string; durationResolutionMap?: { duration: number[]; resolution: string[] }[] }>(model: T): T {
+  if (!isFixedDurationSeedanceVideoModel(model.modelName, model.name) || !Array.isArray(model.durationResolutionMap)) return model;
+  return {
+    ...model,
+    durationResolutionMap: model.durationResolutionMap.map((item) => ({
+      ...item,
+      duration: [FIXED_SEEDANCE_VIDEO_DURATION_SECONDS],
+    })),
+  };
 }
 
 export function expandStoryboardItemsForDuration<T extends StoryboardTrackItem>(items: T[], maxDuration = MAX_TRACK_DURATION_SECONDS): Array<PlannedStoryboardTrackItem<T>> {

@@ -17,6 +17,12 @@ const PANEL_EXECUTION_START = "<!-- TOONFLOW:DOC_STORYBOARD_PANEL_EXECUTION:STAR
 const PANEL_EXECUTION_END = "<!-- TOONFLOW:DOC_STORYBOARD_PANEL_EXECUTION:END -->";
 const DIRECTOR_PRESET_START = "<!-- TOONFLOW:DOC_DIRECTOR_CAMERA_PRESETS:START -->";
 const DIRECTOR_PRESET_END = "<!-- TOONFLOW:DOC_DIRECTOR_CAMERA_PRESETS:END -->";
+const AUTO_REVIEW_DECISION_START = "<!-- TOONFLOW:AUTO_REVIEW_DECISION_FLOW:START -->";
+const AUTO_REVIEW_DECISION_END = "<!-- TOONFLOW:AUTO_REVIEW_DECISION_FLOW:END -->";
+const AUTO_REVIEW_RESULT_START = "<!-- TOONFLOW:AUTO_REVIEW_RESULT_HANDLING:START -->";
+const AUTO_REVIEW_RESULT_END = "<!-- TOONFLOW:AUTO_REVIEW_RESULT_HANDLING:END -->";
+const AUTO_REVIEW_SUPERVISION_START = "<!-- TOONFLOW:AUTO_REVIEW_SUPERVISION_RESULT:START -->";
+const AUTO_REVIEW_SUPERVISION_END = "<!-- TOONFLOW:AUTO_REVIEW_SUPERVISION_RESULT:END -->";
 
 const shotGroupingPresets = `## 文档增强：分镜拆分预设
 
@@ -94,6 +100,69 @@ const directorCameraPresets = `## 文档增强：导演镜头预设规划
 - 多资产镜头必须明确角色、场景、道具各自的标准名称，避免别名；后续生成时会映射为 @图N。
 - 镜头规划可以描述内部时间推进，但必须保持剧情事实不扩写、不新增未出现资产。`;
 
+const autoReviewDecisionFlow = `### 自动审查模式
+
+**触发条件：**
+- 用户明确说“自动审查”“自动推进”“接替用户审查”“自动下一步”“继续完成”“完整制作”等。
+- 用户只说“继续/下一步”，且没有要求人工确认时，默认按自动审查模式处理。
+
+**自动审查门禁：**
+
+| 监督层结论 | 决策层操作 |
+|------------|-----------|
+| \`PASS\` 或评分 A/B | 简要展示审核摘要，立即派发下一阶段 |
+| \`AUTO_FIX\` 或评分 C | 提取监督层“自动修复指令”，回派当前阶段执行层修复，修复后重新审核 |
+| \`REWORK\` 或评分 D | 回派当前阶段执行层重做，重做后重新审核 |
+| \`NEED_USER\` | 停止自动推进，展示必须人工决定的问题 |
+
+**阶段自动推进规则：**
+- 阶段1如新增衍生资产，默认自动进入阶段2并生成全部新增衍生资产图片；如执行层明确“不需要衍生资产”，直接进入阶段3。
+- 阶段2为异步图片生成，任务启动后无需等待用户确认；除非执行层明确下一阶段依赖已完成图片，否则直接进入阶段3。
+- 阶段3执行完成后必须自动审核；A/B 进入阶段4，C/D 自动修复/重做后再审。
+- 阶段4执行完成后必须自动审核；A/B 进入阶段5，C/D 自动修复/重做后再审。
+- 阶段5多参模式不再询问用户：多参=是时默认使用“分镜图辅助多参模式”；多参=否时使用“首位帧模式”。如果用户明确要求纯文本多参，则按用户要求执行。
+- 阶段6启动全部 \`shouldGenerateImage=true\` 分镜图生成后结束自动流程。`;
+
+const autoReviewDecisionResult = `### 自动审查结果处理
+
+阶段3、4的监督层报告必须包含「自动审查结论」。决策层按以下规则执行：
+
+1. \`PASS\`：展示一句审核摘要，立即进入下一阶段。
+2. \`AUTO_FIX\`：使用监督层给出的“自动修复指令”回派当前阶段执行层；修复完成后再次调用监督层审核。
+3. \`REWORK\`：使用监督层给出的“重做指令”回派当前阶段执行层；重做完成后再次调用监督层审核。
+4. \`NEED_USER\`：停止自动推进，展示必须由用户选择的问题。
+5. 若监督层未输出明确结论：按评分兜底，A/B=PASS，C=AUTO_FIX，D=REWORK。
+6. 同一阶段自动修复/重做最多 2 轮，超过后停止并请求用户决策。`;
+
+const autoReviewSupervisionResult = `### 自动审查结论格式
+
+每次审核报告末尾必须输出以下区块，供决策层自动推进：
+
+\`\`\`markdown
+## 自动审查结论
+- **结论**：PASS / AUTO_FIX / REWORK / NEED_USER
+- **评分**：A/B/C/D
+- **下一步**：进入阶段X / 修复当前阶段 / 重做当前阶段 / 停止等待用户
+- **自动修复指令**：{100字以内；PASS时写“无”}
+- **止损原因**：{无 / 必须人工选择的事项}
+\`\`\`
+
+### 自动审查判定规则
+
+| 条件 | 结论 | 说明 |
+|------|------|------|
+| 评分 A | PASS | 可直接进入下一阶段 |
+| 评分 B 且无严重问题 | PASS | 小问题不阻断流程；将建议作为后续阶段注意事项 |
+| 评分 C 且问题有明确单一路径修复方案 | AUTO_FIX | 输出可直接派发给执行层的修复指令 |
+| 评分 D 且主要问题为整体结构错误/大量遗漏 | REWORK | 输出重做当前阶段的指令 |
+| 存在多个互斥创作方向、用户偏好必须选择、或无法判断修复方案 | NEED_USER | 停止自动推进，列出必须人工决定的问题 |
+
+自动修复指令必须满足：
+- 只包含当前阶段产出物需要修改的内容，不扩展新剧情、不新增资产。
+- 指令正文控制在 100 字以内，便于决策层直接派发。
+- 如果是分镜表修复，必须明确修复范围（如“补齐缺失台词”“修正不存在的资产ID”“补场景资产ID”）。
+- 如果是导演规划修复，必须明确修复维度（如“补齐声音方向”“替换不存在资产引用”“补齐第X场规划”）。`;
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -109,12 +178,152 @@ function replaceSection(content: string, section: PromptPresetSection) {
   return `${content.trimEnd()}\n\n${nextBlock}\n`;
 }
 
+function replaceSectionBefore(content: string, section: PromptPresetSection, beforeMarker: string, legacyHeading?: string) {
+  const nextBlock = `${section.start}\n${section.body.trim()}\n${section.end}`;
+  const pattern = new RegExp(`${escapeRegExp(section.start)}[\\s\\S]*?${escapeRegExp(section.end)}`, "m");
+
+  if (pattern.test(content)) {
+    return content.replace(pattern, nextBlock);
+  }
+
+  if (legacyHeading) {
+    const legacyIndex = content.indexOf(legacyHeading);
+    const markerAfterLegacy = legacyIndex >= 0 ? content.indexOf(beforeMarker, legacyIndex + legacyHeading.length) : -1;
+    if (legacyIndex >= 0 && markerAfterLegacy > legacyIndex) {
+      return `${content.slice(0, legacyIndex).trimEnd()}\n\n${nextBlock}\n\n${content.slice(markerAfterLegacy).trimStart()}`;
+    }
+  }
+
+  const markerIndex = content.indexOf(beforeMarker);
+  if (markerIndex >= 0) {
+    return `${content.slice(0, markerIndex).trimEnd()}\n\n${nextBlock}\n\n${content.slice(markerIndex).trimStart()}`;
+  }
+
+  return replaceSection(content, section);
+}
+
+function replaceOnce(content: string, search: string, replacement: string) {
+  return content.includes(search) ? content.replace(search, replacement) : content;
+}
+
+function patchDecisionAgentSkill(content: string) {
+  let next = content;
+
+  if (!next.includes("**自动审查优先**")) {
+    next = replaceOnce(
+      next,
+      "- **决策层不做执行层的判断**，执行层返回什么结论就基于该结论决策下一步。",
+      "- **决策层不做执行层的判断**，执行层返回什么结论就基于该结论决策下一步。\n- **自动审查优先**：当用户要求“自动审查 / 自动推进 / 继续 / 完整制作 / 接替用户审查”时，进入自动审查模式。自动审查模式下，决策层使用监督层报告替代用户审查，根据评分自动通过、自动修复或止损，不再默认等待用户确认。",
+    );
+  }
+
+  next = replaceOnce(
+    next,
+    "- **审核规则**：仅阶段3（导演规划）和阶段4（构建分镜表）需要审核，执行完毕后自动派发监督层",
+    "- **审核规则**：仅阶段3（导演规划）和阶段4（构建分镜表）需要审核，执行完毕后自动派发监督层\n- **自动审查止损**：同一阶段最多自动修复 2 轮。连续 2 轮仍为 C/D，或监督层输出 NEED_USER 时，必须停止并向用户展示需要人工决定的问题。",
+  );
+  next = replaceOnce(
+    next,
+    '| 衍生资产清单（已写入） | 展示给用户，询问是否生成图片 |',
+    '| 衍生资产清单（已写入） | 自动审查模式：默认全部进入阶段2生成图片；人工审查模式：展示给用户并询问是否确认生成图片 |',
+  );
+  next = replaceOnce(
+    next,
+    "> 约束：阶段1必须完成衍生资产信息写入，不得仅输出分析文本；需展示给用户确认是否进入图片生成",
+    "> 约束：阶段1必须完成衍生资产信息写入；人工审查模式需展示给用户确认是否进入图片生成；自动审查模式默认生成全部新增衍生资产。",
+  );
+  next = replaceOnce(
+    next,
+    "| 输入 | 需要生成图片的衍生资产清单（来自用户确认） |",
+    "| 输入 | 需要生成图片的衍生资产清单（自动审查模式默认全部新增资产；人工审查模式来自用户确认） |",
+  );
+  next = replaceOnce(
+    next,
+    "| 前置条件 | 阶段1完成且用户确认生成 |",
+    "| 前置条件 | 阶段1完成且已确定生成清单 |",
+  );
+  next = replaceOnce(
+    next,
+    "**决策层行为：** 将用户确认的资产清单（或子集）派发给执行层。返回确认后，告知用户图片生成中，可继续进入阶段3。",
+    "**决策层行为：** 将确定的资产清单（或子集）派发给执行层。返回确认后，告知用户图片生成中；自动审查模式直接进入阶段3，人工审查模式询问用户是否进入阶段3。",
+  );
+  next = replaceOnce(
+    next,
+    "| 前置条件 | 阶段4完成且用户确认通过审核 |",
+    "| 前置条件 | 阶段4完成且已通过审核门禁 |",
+  );
+  next = replaceOnce(
+    next,
+    '| 是 | 向用户询问：使用 **"纯文本多参模式"** 还是 **"分镜图辅助多参模式"**，等待用户确认后，将所选模式随任务指令一起派发给执行层 |',
+    '| 是 | 自动审查模式默认使用 **"分镜图辅助多参模式"**；人工审查模式向用户询问：使用 **"纯文本多参模式"** 还是 **"分镜图辅助多参模式"**，等待用户确认后，将所选模式随任务指令一起派发给执行层 |',
+  );
+  next = replaceOnce(
+    next,
+    "监督层审核完毕后将报告展示给用户。决策层**等待用户回复**，根据用户反馈决定下一步：",
+    "监督层审核完毕后将报告展示给用户。若处于自动审查模式，决策层必须读取报告中的「自动审查结论」并立即执行对应动作；若处于人工审查模式，才等待用户回复。",
+  );
+
+  next = replaceSectionBefore(
+    next,
+    { start: AUTO_REVIEW_DECISION_START, end: AUTO_REVIEW_DECISION_END, body: autoReviewDecisionFlow },
+    "### 阶段1：衍生资产分析",
+    "### 自动审查模式",
+  );
+  next = replaceSectionBefore(
+    next,
+    { start: AUTO_REVIEW_RESULT_START, end: AUTO_REVIEW_RESULT_END, body: autoReviewDecisionResult },
+    "### 调度决策树",
+    "### 自动审查结果处理",
+  );
+
+  return next;
+}
+
+function patchSupervisionAgentSkill(content: string) {
+  let next = content;
+
+  next = replaceOnce(
+    next,
+    "**核心原则：你负责独立审查，不参与创作执行，只提出问题和建议。**",
+    "**核心原则：你负责独立审查并输出可执行结论。人工审查模式下只提出问题和建议；自动审查模式下必须给出可由决策层直接执行的自动审查结论。**",
+  );
+  next = replaceOnce(
+    next,
+    "5. 按「审核报告格式」生成报告",
+    "5. 按「审核报告格式」生成报告，并在报告末尾输出「自动审查结论」",
+  );
+  next = replaceOnce(
+    next,
+    "## 需要您决定（仅 C/D 级或严重问题存在多选方案时输出）\n1. {选择题}",
+    "## 需要您决定（仅 C/D 级或严重问题存在多选方案时输出）\n1. {选择题}\n\n## 自动审查结论\n- **结论**：PASS / AUTO_FIX / REWORK / NEED_USER\n- **评分**：A/B/C/D\n- **下一步**：进入阶段X / 修复当前阶段 / 重做当前阶段 / 停止等待用户\n- **自动修复指令**：{100字以内；PASS时写“无”}\n- **止损原因**：{无 / 必须人工选择的事项}",
+  );
+
+  return replaceSectionBefore(
+    next,
+    { start: AUTO_REVIEW_SUPERVISION_START, end: AUTO_REVIEW_SUPERVISION_END, body: autoReviewSupervisionResult },
+    "### 审核报告格式",
+    "### 自动审查结论格式",
+  );
+}
+
 function patchSkillFile(relativePath: string, sections: PromptPresetSection[]) {
   const filePath = u.getPath(["skills", ...relativePath.split("/")]);
   if (!fs.existsSync(filePath)) return false;
 
   const current = fs.readFileSync(filePath, "utf-8");
   const next = sections.reduce((value, section) => replaceSection(value, section), current);
+  if (next === current) return false;
+
+  fs.writeFileSync(filePath, next);
+  return true;
+}
+
+function patchSkillFileWithTransform(relativePath: string, transform: (content: string) => string) {
+  const filePath = u.getPath(["skills", ...relativePath.split("/")]);
+  if (!fs.existsSync(filePath)) return false;
+
+  const current = fs.readFileSync(filePath, "utf-8");
+  const next = transform(current);
   if (next === current) return false;
 
   fs.writeFileSync(filePath, next);
@@ -138,6 +347,8 @@ export async function patchProductionPromptPresetsFromDocs() {
     patchSkillFile("production_execution_director_plan.md", [
       { start: DIRECTOR_PRESET_START, end: DIRECTOR_PRESET_END, body: directorCameraPresets },
     ]),
+    patchSkillFileWithTransform("production_agent_decision.md", patchDecisionAgentSkill),
+    patchSkillFileWithTransform("production_agent_supervision.md", patchSupervisionAgentSkill),
   ];
 
   const changedCount = changes.filter(Boolean).length;

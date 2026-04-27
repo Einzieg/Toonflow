@@ -61,6 +61,7 @@ import promptEditor from "@/components/promptEditor.vue";
 import imageListCacheStore from "@/stores/imageListCache";
 
 const VIDEO_PROMPT_TIMEOUT = 5 * 60 * 1000;
+const FIXED_SEEDANCE_VIDEO_DURATION_SECONDS = 15;
 
 const { project } = storeToRefs(projectStore());
 const episodesId = inject<Ref<number>>("episodesId")!;
@@ -93,8 +94,14 @@ const storyboardList = ref<StoryboardItem[]>([]); // 分镜列表
 
 /** 排序优先级：assets有图=0，storyboard有图=1，无图=2 */
 function getImageItemPriority(item: UploadItem): number {
+  if (item.volcengineAssetUri) return 0;
   if (item.src) return item.sources === "assets" ? 0 : 1;
   return 2;
+}
+
+function isUsableReferenceItem(item: UploadItem | TrackMedia | undefined) {
+  if (isFixedDurationSeedanceModel(modelParmas.value.model, modeOptions.value.modelName) && item?.sources === "assets" && item.id) return true;
+  return Boolean(item?.src || item?.volcengineAssetUri);
 }
 
 const imageList = computed({
@@ -183,12 +190,31 @@ const activeTrackGenTextLoading = computed(() => {
   const trackId = trackList.value[activeTrackIndex.value]?.id;
   return trackId != null ? !!genTextLoadingMap.value[trackId] : false;
 });
+
+function isFixedDurationSeedanceModel(model?: string | null, displayName?: string | null) {
+  const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
+  return value.includes("seedance") && (value.includes("seedance-2-0") || value.includes("seedance-2.0") || value.includes("seedance2.0"));
+}
+
+function normalizeModeOptions(data: VideoModel): VideoModel {
+  if (!isFixedDurationSeedanceModel(modelParmas.value.model, data.modelName)) return data;
+  return {
+    ...data,
+    durationResolutionMap: data.durationResolutionMap?.map((item) => ({
+      ...item,
+      duration: [FIXED_SEEDANCE_VIDEO_DURATION_SECONDS],
+    })) ?? [{ duration: [FIXED_SEEDANCE_VIDEO_DURATION_SECONDS], resolution: [] }],
+  };
+}
+
 /** 将时长限制在模型支持的范围内 */
 function clampDuration(trackDuration: number): number {
+  if (isFixedDurationSeedanceModel(modelParmas.value.model, modeOptions.value.modelName)) return FIXED_SEEDANCE_VIDEO_DURATION_SECONDS;
   const drMap = modeOptions.value?.durationResolutionMap;
   if (Array.isArray(drMap) && drMap.length > 0 && drMap[0].duration?.length) {
     const durations = drMap[0].duration;
-    return Math.max(Math.min(...durations), Math.min(trackDuration, Math.max(...durations)));
+    const value = Number.isFinite(Number(trackDuration)) && Number(trackDuration) > 0 ? Number(trackDuration) : modelParmas.value.duration;
+    return Math.max(Math.min(...durations), Math.min(value, Math.max(...durations)));
   }
   return trackDuration;
 }
@@ -208,9 +234,9 @@ watch(
       return;
     }
     axios.post("/modelSelect/getModelDetail", { modelId: val }).then(({ data }) => {
-      modeOptions.value = data;
+      modeOptions.value = normalizeModeOptions(data);
       modelParmas.value.audio = data.audio !== false && data.audio !== "false";
-      const drMap = data.durationResolutionMap;
+      const drMap = modeOptions.value.durationResolutionMap;
       if (Array.isArray(drMap) && drMap.length > 0) {
         if (drMap[0].resolution?.length) modelParmas.value.resolution = drMap[0].resolution[0];
         if (drMap[0].duration?.length) modelParmas.value.duration = clampDuration(modelParmas.value.duration);
@@ -407,7 +433,7 @@ async function generateVideo() {
                     : modelParmas.value.mode === "singleImage"
                       ? imageList.value.slice(0, 1)
                       : imageList.value;
-                  const filtered = preSliced.filter((item) => Boolean(item.src) && item.id).map(({ id, sources }) => ({ id, sources }));
+                  const filtered = preSliced.filter((item) => isUsableReferenceItem(item) && item.id).map(({ id, sources }) => ({ id, sources }));
                   if (frameMode.includes(modelParmas.value.mode)) return filtered.slice(0, 2);
                   if (modelParmas.value.mode === "singleImage") return filtered.slice(0, 1);
                   return filtered;

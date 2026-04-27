@@ -167,8 +167,13 @@ function isUpstreamEmptyOutputError(error: unknown): boolean {
 
 function getEmptyOutputFallbackModel(modelName: `${string}:${string}`): `${string}:${string}` | null {
   const [vendorId, model] = modelName.split(/:(.+)/) as [string, string];
-  if (!["ds2api", "new-api"].includes(vendorId)) return null;
-  return `${vendorId}:${model === "gpt-5.2" ? "gpt-5.4" : "gpt-5.2"}`;
+  if (vendorId === "new-api") {
+    return `${vendorId}:${model.startsWith("gpt-5.2") ? "gpt-5.5" : "gpt-5.2"}`;
+  }
+  if (vendorId === "ds2api") {
+    return `${vendorId}:${model.startsWith("gpt-5.2") ? "gpt-5.4" : "gpt-5.2"}`;
+  }
+  return null;
 }
 
 class AiText {

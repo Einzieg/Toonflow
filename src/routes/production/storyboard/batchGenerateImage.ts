@@ -38,14 +38,14 @@ export default router.post(
       .where((qb) => {
         qb.whereNull("prompt").orWhere("prompt", "");
       })
-      .update({ state: "未生成" });
+      .update({ state: "未生成", reason: "" });
     await u
       .db("o_storyboard")
       .whereIn("id", finalStoryboardIds)
       .where("scriptId", scriptId)
       .whereNotNull("prompt")
       .whereNot("prompt", "")
-      .update({ state: "生成中" });
+      .update({ state: "生成中", reason: "" });
 
     const projectSettingData = await u.db("o_project").where("id", projectId).select("imageModel", "imageQuality", "artStyle", "videoRatio").first();
 
@@ -105,15 +105,24 @@ export default router.post(
           await u.db("o_storyboard").where("id", item.id).update({
             filePath: savePath,
             state: "已完成",
+            reason: "",
           });
         })
         .catch(async (e) => {
+          const message = u.error(e).message;
+          console.error("[storyboard.batchGenerateImage] image generation failed", {
+            id: item.id,
+            index: item.index,
+            projectId,
+            scriptId,
+            message,
+          });
           await u
             .db("o_storyboard")
             .where("id", item.id)
             .update({
               filePath: "",
-              reason: u.error(e).message,
+              reason: message,
               state: "生成失败",
             });
         });

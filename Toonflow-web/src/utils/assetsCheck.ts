@@ -9,6 +9,7 @@ interface Asset {
   prompt: string;
   describe: string;
   remark: string;
+  volcengineAssetUri?: string | null;
   src: string;
   type: "role" | "tool" | "scene" | "clip";
   imageId: number | null;

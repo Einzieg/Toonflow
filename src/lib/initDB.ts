@@ -445,6 +445,7 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.text("remark");
         table.text("type");
         table.text("describe");
+        table.text("volcengineAssetUri");
         table.integer("scriptId"); //剧本id
         table.integer("imageId").unsigned().references("id").inTable("o_image");
         table.integer("assetsId");
