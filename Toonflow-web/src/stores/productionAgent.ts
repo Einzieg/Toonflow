@@ -226,6 +226,21 @@ function makeProductionAgentStore(projectId: string) {
             const storyData = await batchGenerateStoryboard(data.ids);
             callback({ success: true, message: storyData });
           });
+          s.on("clearStoryboardPanel", async (data, callback) => {
+            flowData.value.storyboard = [];
+            stopStoryboardPolling();
+            callback?.({
+              success: true,
+              message: `已清空分镜 ${data?.storyboardCount ?? 0} 条`,
+            });
+          });
+          s.on("setStoryboardTable", async (data, callback) => {
+            flowData.value.storyboardTable = data?.storyboardTable ?? "";
+            callback?.({
+              success: true,
+              message: `已写入分镜表 ${data?.rowCount ?? 0} 行`,
+            });
+          });
         }
       },
       { immediate: true },

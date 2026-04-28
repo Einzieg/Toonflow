@@ -219,9 +219,14 @@ export interface o_vendorConfig {
 }
 export interface o_video {
   'errorReason'?: string | null;
+  'externalTaskId'?: string | null;
   'filePath'?: string | null;
   'id'?: number;
+  'localSaveErrorReason'?: string | null;
+  'localSaveState'?: string | null;
   'projectId'?: number | null;
+  'remoteUrl'?: string | null;
+  'remoteUrlExpireTime'?: number | null;
   'scriptId'?: number | null;
   'state'?: string | null;
   'time'?: number | null;

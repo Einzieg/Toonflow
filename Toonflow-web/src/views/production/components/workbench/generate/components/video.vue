@@ -137,16 +137,16 @@ function handleDeleteVideo(value: HistoryVideoItem) {
 }
 
 /** 单个视频下载 */
-async function downloadVideo(value: HistoryVideoItem) {
-  const response = await fetch(value.src);
-  const blob = await response.blob();
+function downloadVideo(value: HistoryVideoItem) {
+  if (!value.src) return;
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
+  link.href = value.src;
   link.download = "视频.mp4";
+  link.target = "_blank";
+  link.rel = "noopener";
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(link.href);
 }
 
 /** 捕获视频封面（绘制 0.5s 帧到 canvas） */

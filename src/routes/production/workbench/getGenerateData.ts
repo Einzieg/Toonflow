@@ -3,19 +3,8 @@ import u from "@/utils";
 import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { getRenderableVideoSrc, normalizeVideoState } from "@/utils/videoSource";
 const router = express.Router();
-
-function normalizeVideoState(state?: string | null) {
-  if (state === "已完成" || state === "生成成功") return "已完成";
-  if (state === "生成中") return "生成中";
-  if (state === "生成失败") return "生成失败";
-  return "未生成";
-}
-
-async function getRenderableVideoSrc(filePath?: string | null, state?: string | null) {
-  if (normalizeVideoState(state) !== "已完成" || !filePath) return "";
-  return u.oss.getFileUrl(filePath);
-}
 
 interface VideoItem {
   id: number;
@@ -163,7 +152,7 @@ export default router.post(
             .filter((v) => v.videoTrackId === trackId)
             .map(async (v) => ({
               id: v.id!,
-              src: await getRenderableVideoSrc(v.filePath, v.state),
+              src: await getRenderableVideoSrc(v),
               state: normalizeVideoState(v.state),
               errorReason: v.errorReason ?? "",
             })),

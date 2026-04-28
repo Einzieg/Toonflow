@@ -65,6 +65,144 @@ async function recoverMissingProjects(knex: Knex) {
   }
 }
 
+function patchVolcengineVendorRemoteVideoUrl() {
+  const vendorPath = u.getPath(["vendor", "volcengine.ts"]);
+  if (!fs.existsSync(vendorPath)) return;
+
+  let code = fs.readFileSync(vendorPath, "utf-8");
+  let nextCode = code;
+
+  nextCode = nextCode.replace(/@version 2\.[456]/, "@version 2.7");
+  nextCode = nextCode.replace(/version:\s*"2\.[456]"/, 'version: "2.7"');
+
+  if (!nextCode.includes("preserveRemoteUrl?: boolean")) {
+    nextCode = nextCode.replace(
+      /(interface VideoConfig\s*{[\s\S]*?^\s*mode:\s*[^;]+;)(\r?\n})/m,
+      "$1\n  preserveRemoteUrl?: boolean;$2",
+    );
+  }
+  if (!nextCode.includes("onTaskCreated?: (taskId: string)")) {
+    nextCode = nextCode.replace(
+      /(interface VideoConfig\s*{[\s\S]*?^\s*preserveRemoteUrl\?: boolean;)(\r?\n})/m,
+      "$1\n  onTaskCreated?: (taskId: string) => Promise<void> | void;$2",
+    );
+  }
+
+  if (!nextCode.includes("withVolcengineRetry")) {
+    nextCode = nextCode.replace(
+      /(function isRealPersonImageError\(error: any\) \{[\s\S]*?^})/m,
+      `$1
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientVideoNetworkError(error: any) {
+  if (error?.response) return false;
+  const text = getAxiosErrorText(error).toLowerCase();
+  return [
+    "client network socket disconnected",
+    "secure tls connection",
+    "socket hang up",
+    "network error",
+    "fetch failed",
+    "econnreset",
+    "econnaborted",
+    "etimedout",
+    "eai_again",
+    "enotfound",
+    "enotreachable",
+    "enetunreach",
+    "ehostunreach",
+  ].some((keyword) => text.includes(keyword));
+}
+
+function isSafeCreateRetryError(error: any) {
+  if (error?.response) return false;
+  const text = getAxiosErrorText(error).toLowerCase();
+  return (
+    text.includes("client network socket disconnected before secure tls connection was established") ||
+    text.includes("eai_again") ||
+    text.includes("enotfound") ||
+    text.includes("enetunreach") ||
+    text.includes("ehostunreach")
+  );
+}
+
+async function withVolcengineRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  options: { retries?: number; safeCreate?: boolean } = {},
+): Promise<T> {
+  const retries = options.retries ?? 3;
+  let lastError: any = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const retryable = options.safeCreate ? isSafeCreateRetryError(error) : isTransientVideoNetworkError(error);
+      if (!retryable || attempt >= retries) throw error;
+
+      const delayMs = Math.min(15000, 2000 * attempt);
+      logger(\`[视频生成] \${label}网络异常，\${delayMs / 1000}s 后重试 \${attempt + 1}/\${retries}: \${getAxiosErrorText(error)}\`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}`,
+    );
+  }
+
+  nextCode = nextCode.replace(
+    /  return await urlToBase64\(result\.data!\);\r?\n};/,
+    "  return config.preserveRemoteUrl ? result.data! : await urlToBase64(result.data!);\n};",
+  );
+
+  nextCode = nextCode.replace(
+    /(\r?\n\s*)600000,(\r?\n\s*\);)/,
+    "$130 * 60 * 1000,$2",
+  );
+  nextCode = nextCode.replace(
+    /createResponse = await axios\.post\(`\$\{baseUrl\}\/contents\/generations\/tasks`, body, \{ headers \}\);/g,
+    `createResponse = await withVolcengineRetry(
+      "创建任务",
+      () => axios.post(\`\${baseUrl}/contents/generations/tasks\`, body, { headers }),
+      { safeCreate: true },
+    );`,
+  );
+  if (!nextCode.includes("保存上游任务ID失败")) {
+    nextCode = nextCode.replace(
+      /(\r?\n\s*)logger\(`\[视频生成\] 任务已创建, ID: \$\{taskId\}`\);/,
+      `$1logger(\`[视频生成] 任务已创建, ID: \${taskId}\`);
+  if (typeof config.onTaskCreated === "function") {
+    try {
+      await config.onTaskCreated(taskId);
+    } catch (error) {
+      logger(\`[视频生成] 保存上游任务ID失败: \${getAxiosErrorText(error)}\`);
+    }
+  }`,
+    );
+  }
+  nextCode = nextCode.replace(
+    /const queryResponse = await axios\.get\(`\$\{baseUrl\}\/contents\/generations\/tasks\/\$\{taskId\}`, \{ headers \}\);/,
+    `let queryResponse: any;
+      try {
+        queryResponse = await withVolcengineRetry("查询任务状态", () => axios.get(\`\${baseUrl}/contents/generations/tasks/\${taskId}\`, { headers }));
+      } catch (error) {
+        if (isTransientVideoNetworkError(error)) {
+          logger(\`[视频生成] 查询任务状态临时网络异常，保持任务生成中: \${getAxiosErrorText(error)}\`);
+          return { completed: false };
+        }
+        throw error;
+      }`,
+  );
+
+  if (nextCode !== code) fs.writeFileSync(vendorPath, nextCode, "utf-8");
+}
+
 export default async (knex: Knex): Promise<void> => {
   const addColumn = async (table: string, column: string, type: string) => {
     if (!(await knex.schema.hasTable(table))) return;
@@ -120,6 +258,12 @@ export default async (knex: Knex): Promise<void> => {
   await addColumn("o_prompt", "useData", "text");
   // 火山 Seedance 2.x 可用的官方/授权素材 URI，例如 asset://asset-20260225023032-gnzwk。
   await addColumn("o_assets", "volcengineAssetUri", "text");
+  // 视频上游直链 24 小时内可用于快速预览，本地转存完成后作为长期兜底。
+  await addColumn("o_video", "remoteUrl", "text");
+  await addColumn("o_video", "remoteUrlExpireTime", "integer");
+  await addColumn("o_video", "localSaveState", "text");
+  await addColumn("o_video", "localSaveErrorReason", "text");
+  await addColumn("o_video", "externalTaskId", "text");
   // 添加新字段
   await addColumn("o_agentDeploy", "type", "string");
   // 添加新字段
@@ -217,6 +361,7 @@ export default async (knex: Knex): Promise<void> => {
   if (Number(minimaxVer) < 2.1) {
     u.vendor.writeCode("minimax", vendorData["minimax.ts"]);
   }
+  patchVolcengineVendorRemoteVideoUrl();
   const grsaiVer = await u.vendor.getVendor("grsai").version;
   if (Number(grsaiVer) < 2.1) {
     const grsaiVendorPath = path.resolve(process.cwd(), "data/vendor/grsai.ts");

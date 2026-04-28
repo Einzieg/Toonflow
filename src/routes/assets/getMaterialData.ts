@@ -3,6 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { getRenderableVideoSrc } from "@/utils/videoSource";
 const router = express.Router();
 
 // 获取生成图片
@@ -43,11 +44,11 @@ export default router.post(
     // 按轨道分组处理视频
     const video = await Promise.all(
       trackRows.map(async (track) => {
-        const videoItems = await u.db("o_video").where("o_video.videoTrackId", track.trackId).andWhere("o_video.state", "生成成功").select("*");
+        const videoItems = await u.db("o_video").where("o_video.videoTrackId", track.trackId).whereIn("o_video.state", ["生成成功", "已完成"]).select("*");
         const videoList = await Promise.all(
           videoItems.map(async (v) => ({
             id: v.id,
-            filePath: v.filePath ? await u.oss.getFileUrl(v.filePath) : "",
+            filePath: await getRenderableVideoSrc(v),
             videoTrackId: v.videoTrackId,
           })),
         );

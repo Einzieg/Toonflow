@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { MAX_TRACK_DURATION_SECONDS, isFixedDurationSeedanceVideoModel, resolveVideoGenerationDuration } from "@/utils/storyboardTrack";
+import { REMOTE_VIDEO_URL_TTL_MS } from "@/utils/videoSource";
 import path from "node:path";
 const router = express.Router();
 
@@ -211,6 +212,7 @@ export default router.post(
       filePath: videoPath,
       time: Date.now(),
       state: "生成中",
+      localSaveState: "未保存",
       scriptId,
       projectId,
       videoTrackId: trackId,
@@ -234,6 +236,10 @@ export default router.post(
             aspectRatio: (ratio?.videoRatio as "16:9" | "9:16") || "16:9",
             resolution,
             audio,
+            preserveRemoteUrl: true,
+            onTaskCreated: async (externalTaskId: string) => {
+              await u.db("o_video").where("id", videoId).update({ externalTaskId });
+            },
           },
           {
             projectId,
@@ -242,8 +248,39 @@ export default router.post(
             relatedObjects: JSON.stringify(relatedObjects),
           },
         );
-        await aiVideo.save(videoPath);
-        await u.db("o_video").where("id", videoId).update({ state: "已完成" });
+        const remoteUrl = aiVideo.getRemoteUrl();
+        if (remoteUrl) {
+          await u.db("o_video").where("id", videoId).update({
+            state: "已完成",
+            remoteUrl,
+            remoteUrlExpireTime: Date.now() + REMOTE_VIDEO_URL_TTL_MS,
+            localSaveState: "保存中",
+            localSaveErrorReason: "",
+          });
+
+          aiVideo
+            .save(videoPath)
+            .then(async () => {
+              await u.db("o_video").where("id", videoId).update({
+                filePath: videoPath,
+                localSaveState: "已保存",
+                localSaveErrorReason: "",
+              });
+            })
+            .catch(async (saveError: any) => {
+              await u.db("o_video").where("id", videoId).update({
+                localSaveState: "保存失败",
+                localSaveErrorReason: u.error(saveError).message,
+              });
+            });
+        } else {
+          await aiVideo.save(videoPath);
+          await u.db("o_video").where("id", videoId).update({
+            state: "已完成",
+            localSaveState: "已保存",
+            localSaveErrorReason: "",
+          });
+        }
       } catch (error: any) {
         await u
           .db("o_video")

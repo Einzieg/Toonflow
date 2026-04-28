@@ -83,6 +83,8 @@ function isRetryablePollError(error: unknown) {
   const message = normalizePollErrorMessage(error).toLowerCase();
   return [
     "fetch failed",
+    "client network socket disconnected",
+    "secure tls connection",
     "network error",
     "network request failed",
     "socket hang up",

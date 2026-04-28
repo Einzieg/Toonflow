@@ -519,6 +519,11 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
       builder: (table) => {
         table.integer("id").notNullable();
         table.text("filePath");
+        table.text("remoteUrl");
+        table.integer("remoteUrlExpireTime");
+        table.text("localSaveState");
+        table.text("localSaveErrorReason");
+        table.text("externalTaskId");
         table.text("errorReason");
         table.integer("time");
         table.text("state");

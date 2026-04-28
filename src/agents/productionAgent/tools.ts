@@ -72,6 +72,54 @@ interface ToolConfig {
 export default (toolCpnfig: ToolConfig) => {
   const { resTool, toolsNames, msg } = toolCpnfig;
   const { socket } = resTool;
+  const getAgentWorkData = async () => {
+    const { projectId, scriptId } = resTool.data;
+    const existing = await u
+      .db("o_agentWorkData")
+      .where("projectId", String(projectId))
+      .where("episodesId", String(scriptId))
+      .where("key", "productionAgent")
+      .first();
+    let data: Record<string, any> = {};
+
+    if (existing?.data) {
+      try {
+        data = JSON.parse(existing.data);
+      } catch {
+        data = {};
+      }
+    }
+
+    if (!data.script) {
+      const scriptData = await u.db("o_script").where("id", scriptId).select("content").first();
+      data.script = scriptData?.content ?? "";
+    }
+    if (!Array.isArray(data.storyboard)) data.storyboard = [];
+    if (!data.workbench) data.workbench = { videoList: [] };
+
+    return { existing, data };
+  };
+  const saveAgentWorkData = async (existing: any, data: Record<string, any>) => {
+    const { projectId, scriptId } = resTool.data;
+    if (existing) {
+      await u
+        .db("o_agentWorkData")
+        .where("projectId", String(projectId))
+        .where("episodesId", String(scriptId))
+        .where("key", "productionAgent")
+        .update({ data: JSON.stringify(data), updateTime: Date.now() });
+    } else {
+      await u.db("o_agentWorkData").insert({
+        projectId,
+        episodesId: scriptId,
+        key: "productionAgent",
+        data: JSON.stringify(data),
+        createTime: Date.now(),
+        updateTime: Date.now(),
+      });
+    }
+  };
+  const countStoryboardRows = (content: string) => [...content.matchAll(/^\|\s*\d+\s*\|/gm)].length;
   const storyboardGenerateInputSchema = z.object({
     ids: z.array(z.number()).describe("必须获取真实的分镜ID，支持批量生成"),
   });
@@ -92,6 +140,12 @@ export default (toolCpnfig: ToolConfig) => {
       });
 
     return "开始生成分镜";
+  };
+  const emitClientEvent = async (eventName: string, data: Record<string, any>) => {
+    await Promise.race([
+      new Promise((resolve) => socket.emit(eventName, data, (res: any) => resolve(res))),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
   };
   const tools: Record<string, Tool> = {
     get_flowData: tool({
@@ -192,6 +246,97 @@ export default (toolCpnfig: ToolConfig) => {
           });
 
         return "开始生成衍生资产";
+      },
+    }),
+    clear_storyboard_panel: tool({
+      description:
+        "清空当前项目当前剧本的分镜面板。重新生成完整分镜面板、重写阶段5、从旧分镜重新开始前必须先调用；会同步删除旧分镜、分镜资产关联、视频轨道和关联视频，避免新分镜追加到旧分镜后面。",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const thinking = msg.thinking("正在清空分镜面板...");
+        const { projectId, scriptId } = resTool.data;
+        if (!projectId || !scriptId) {
+          thinking.updateTitle("清空分镜面板失败");
+          thinking.appendText("缺少项目或剧本上下文");
+          thinking.complete();
+          return "缺少项目或剧本上下文，无法清空分镜面板";
+        }
+
+        const storyboardRows = await u.db("o_storyboard").where({ projectId, scriptId }).select("id", "trackId");
+        const storyboardIds = storyboardRows.map((item: any) => Number(item.id)).filter((id) => Number.isInteger(id));
+        const trackIdsFromStoryboard = storyboardRows.map((item: any) => Number(item.trackId)).filter((id) => Number.isInteger(id));
+        const trackRows = await u.db("o_videoTrack").where({ projectId, scriptId }).select("id");
+        const trackIds = _.uniq([...trackIdsFromStoryboard, ...trackRows.map((item: any) => Number(item.id)).filter((id) => Number.isInteger(id))]);
+
+        if (storyboardIds.length) {
+          await u.db("o_assets2Storyboard").whereIn("storyboardId", storyboardIds).del();
+          await u.db("o_storyboard").whereIn("id", storyboardIds).del();
+        }
+        if (trackIds.length) {
+          await u.db("o_video").where({ projectId, scriptId }).whereIn("videoTrackId", trackIds).del();
+          await u.db("o_videoTrack").where({ projectId, scriptId }).whereIn("id", trackIds).del();
+        }
+        const { existing, data } = await getAgentWorkData();
+        data.storyboard = [];
+        data.workbench = { ...(data.workbench ?? {}), videoList: [] };
+        await saveAgentWorkData(existing, data);
+
+        await emitClientEvent("clearStoryboardPanel", {
+          projectId,
+          scriptId,
+          storyboardCount: storyboardIds.length,
+          trackCount: trackIds.length,
+        });
+
+        thinking.appendText(`已清空分镜 ${storyboardIds.length} 条，视频轨道 ${trackIds.length} 条。`);
+        thinking.updateTitle("分镜面板已清空");
+        thinking.complete();
+        return `分镜面板已清空：删除分镜 ${storyboardIds.length} 条，视频轨道 ${trackIds.length} 条。`;
+      },
+    }),
+    set_storyboard_table: tool({
+      description:
+        "写入当前项目当前剧本的分镜表。阶段4构建或修复分镜表时必须调用。长分镜表可分块调用：第一块 mode=replace，后续块 mode=append，避免长 XML/纯文本输出被截断后无法落库。",
+      inputSchema: z.object({
+        content: z.string().min(1).describe("分镜表 Markdown 表格内容，必须包含表头或连续表格行"),
+        mode: z.enum(["replace", "append"]).default("replace").describe("replace 覆盖旧分镜表；append 追加到现有分镜表末尾"),
+      }),
+      execute: async ({ content, mode }) => {
+        const thinking = msg.thinking(mode === "append" ? "正在追加分镜表..." : "正在写入分镜表...");
+        const { projectId, scriptId } = resTool.data;
+        if (!projectId || !scriptId) {
+          thinking.updateTitle("写入分镜表失败");
+          thinking.appendText("缺少项目或剧本上下文");
+          thinking.complete();
+          return "缺少项目或剧本上下文，无法写入分镜表";
+        }
+
+        const normalizedContent = String(content || "").trim();
+        const currentRowCount = countStoryboardRows(normalizedContent);
+        if (currentRowCount === 0) {
+          thinking.updateTitle("写入分镜表失败");
+          thinking.appendText("内容中未检测到分镜表行");
+          thinking.complete();
+          return "写入失败：内容中未检测到分镜表行";
+        }
+
+        const { existing, data } = await getAgentWorkData();
+        const previousContent = String(data.storyboardTable || "").trim();
+        data.storyboardTable =
+          mode === "append" && previousContent ? `${previousContent}\n${normalizedContent}` : normalizedContent;
+        await saveAgentWorkData(existing, data);
+        await emitClientEvent("setStoryboardTable", {
+          projectId,
+          scriptId,
+          storyboardTable: data.storyboardTable,
+          rowCount: countStoryboardRows(data.storyboardTable),
+        });
+
+        const totalRowCount = countStoryboardRows(data.storyboardTable);
+        thinking.appendText(`本次写入 ${currentRowCount} 行，当前分镜表共 ${totalRowCount} 行。`);
+        thinking.updateTitle("分镜表写入完成");
+        thinking.complete();
+        return `分镜表写入完成：本次 ${currentRowCount} 行，当前共 ${totalRowCount} 行。`;
       },
     }),
     generate_storyboard: tool({

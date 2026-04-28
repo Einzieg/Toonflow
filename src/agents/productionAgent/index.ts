@@ -9,6 +9,13 @@ import ResTool from "@/socket/resTool";
 import * as fs from "fs";
 import path from "path";
 
+type RoleAssetRow = {
+  id: number;
+  name?: string | null;
+  describe?: string | null;
+  volcengineAssetUri?: string | null;
+};
+
 export interface AgentContext {
   socket: Socket;
   isolationKey: string;
@@ -22,6 +29,88 @@ export interface AgentContext {
     think: boolean;
     thinlLevel: 0 | 1 | 2 | 3;
   };
+}
+
+function inferDefaultRoleDerivative(role: RoleAssetRow, sourceText: string) {
+  const text = `${role.name ?? ""}\n${role.describe ?? ""}\n${sourceText}`.toLowerCase();
+  if (/校服|校园|学生|school|student/.test(text)) {
+    return {
+      name: "校服定装",
+      describe: "区别于基础打底态 · 补全符合剧情常态的校服、发型与基础妆造，保持自然站立四视图",
+    };
+  }
+  if (/职场|办公室|公司|商务|西装|职业|office|business|suit/.test(text)) {
+    return {
+      name: "职场定装",
+      describe: "区别于基础打底态 · 补全现代职场服装、发型与基础妆造，保持自然站立四视图",
+    };
+  }
+  if (/古|宫|仙|侠|王|侯|朝|袍|裙|盔甲|铠甲|hanfu|robe|armor/.test(text)) {
+    return {
+      name: "古装定装",
+      describe: "区别于基础打底态 · 补全符合身份与剧情常态的古装服饰、发型与基础妆造，保持自然站立四视图",
+    };
+  }
+  return {
+    name: "常服定装",
+    describe: "区别于基础打底态 · 补全符合剧情常态的完整服装、发型与基础妆造，保持自然站立四视图",
+  };
+}
+
+async function emitAddDeriveAsset(socket: Socket, data: Record<string, any>) {
+  await Promise.race([
+    new Promise((resolve) => socket.emit("addDeriveAsset", data, (res: any) => resolve(res))),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
+}
+
+async function ensureDefaultRoleDerivatives(resTool: ResTool, socket: Socket, projectInfo: any) {
+  const { projectId, scriptId } = resTool.data;
+  if (!projectId || !scriptId) return "";
+
+  const scriptData = await u.db("o_script").where({ id: scriptId }).select("content").first();
+  const scriptAssets = await u.db("o_scriptAssets").where({ scriptId }).select("assetId");
+  const parentAssetIds = scriptAssets.map((item: any) => Number(item.assetId)).filter((id) => Number.isInteger(id));
+  if (!parentAssetIds.length) return "";
+
+  const roleAssets: RoleAssetRow[] = await u
+    .db("o_assets")
+    .whereIn("id", parentAssetIds)
+    .where({ projectId, type: "role" })
+    .whereNull("assetsId")
+    .select("id", "name", "describe", "volcengineAssetUri");
+  if (!roleAssets.length) return "";
+
+  const roleIds = roleAssets.map((item) => item.id);
+  const childRows = await u.db("o_assets").whereIn("assetsId", roleIds).where({ type: "role" }).select("assetsId");
+  const roleIdsWithDerive = new Set(childRows.map((item: any) => Number(item.assetsId)));
+  const created: string[] = [];
+
+  for (const role of roleAssets) {
+    if (roleIdsWithDerive.has(role.id)) continue;
+
+    const inferred = inferDefaultRoleDerivative(
+      role,
+      [scriptData?.content ?? "", projectInfo?.type ?? "", projectInfo?.directorManual ?? "", projectInfo?.artStyle ?? ""].join("\n"),
+    );
+    const startTime = Date.now();
+    const data = {
+      assetsId: role.id,
+      projectId,
+      name: inferred.name,
+      type: "role",
+      describe: inferred.describe,
+      volcengineAssetUri: role.volcengineAssetUri ?? null,
+      startTime,
+    };
+    const [insertedId] = await u.db("o_assets").insert(data);
+    await u.db("o_scriptAssets").insert({ scriptId, assetId: insertedId });
+    await emitAddDeriveAsset(socket, { ...data, id: insertedId });
+    created.push(`${role.name ?? role.id}·${inferred.name}`);
+  }
+
+  if (!created.length) return "";
+  return `\n系统兜底：已为缺少人物衍生的角色补全默认服装定装：${created.join("、")}。`;
 }
 
 function buildMemPrompt(mem: Awaited<ReturnType<Memory["get"]>>): string {
@@ -199,7 +288,7 @@ async function createSubAgent(parentCtx: AgentContext) {
     execute: async ({ prompt }) => {
       const skill = path.join(u.getPath("skills"), "production_execution_derive_assets.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
-      return runAgent({
+      const result = await runAgent({
         key: "productionAgent:deriveAssetsAgent",
         prompt,
         system: systemPrompt,
@@ -211,6 +300,8 @@ async function createSubAgent(parentCtx: AgentContext) {
         ],
         tools: { activate_skill: artSkills.tools.activate_skill },
       });
+      const fallbackResult = await ensureDefaultRoleDerivatives(resTool, parentCtx.socket, projectInfo);
+      return `${result}${fallbackResult}`;
     },
   });
 
@@ -221,18 +312,21 @@ async function createSubAgent(parentCtx: AgentContext) {
     execute: async ({ prompt }) => {
       const skill = path.join(u.getPath("skills"), "production_execution_generate_assets.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
-      return runAgent({
+      const fallbackResult = await ensureDefaultRoleDerivatives(resTool, parentCtx.socket, projectInfo);
+      const promptWithFallback = fallbackResult ? `${prompt}\n${fallbackResult}` : prompt;
+      const result = await runAgent({
         key: "productionAgent:generateAssetsAgent",
-        prompt,
+        prompt: promptWithFallback,
         system: systemPrompt,
         name: "执行导演",
         memoryKey: "assistant:execution",
         messages: [
           { role: "assistant", content: artSkills.prompt + `\n${modelInfo}` },
-          { role: "user", content: prompt },
+          { role: "user", content: promptWithFallback },
         ],
         tools: { activate_skill: artSkills.tools.activate_skill },
       });
+      return `${fallbackResult}${result}`;
     },
   });
 
@@ -329,7 +423,8 @@ async function createSubAgent(parentCtx: AgentContext) {
       const skill = path.join(u.getPath("skills"), "production_execution_storyboard_table.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
 
-      const addPrompt = "\n你必须使用如下XML格式写入工作区：\n```\n<storyboardTable>内容</storyboardTable>\n```";
+      const addPrompt =
+        "\n你必须用 set_storyboard_table 工具写入完整分镜表。长表必须分块写入：第一块 mode=replace，后续块 mode=append。禁止只输出纯文本分析。兼容格式如下：\n```\n<storyboardTable>内容</storyboardTable>\n```";
 
       return runAgent({
         key: "productionAgent:storyboardTableAgent",

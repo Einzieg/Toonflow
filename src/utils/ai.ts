@@ -344,6 +344,8 @@ interface VideoConfig {
   referenceList?: ReferenceList[];
   audio?: boolean;
   mode: VideoMode[];
+  preserveRemoteUrl?: boolean;
+  onTaskCreated?: (taskId: string) => Promise<void> | void;
 }
 
 class AiVideo {
@@ -358,8 +360,9 @@ class AiVideo {
       const fn = await getVendorTemplateFn("videoRequest", mn);
       await referenceList2imageBase642(mn.split(/:(.+)/)[0], input);
 
-      this.result = await fn(input);
-      if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
+      const result = await fn(input);
+      this.result = typeof result === "string" ? result : "";
+      if (this.result.startsWith("http") && !input.preserveRemoteUrl) this.result = await urlToBase64(this.result);
       return this;
     };
     if (taskRecord) {
@@ -368,8 +371,15 @@ class AiVideo {
     return exec(modelName);
   }
   async save(path: string) {
+    if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
     await u.oss.writeFile(path, this.result);
     return this;
+  }
+  getResult() {
+    return this.result;
+  }
+  getRemoteUrl() {
+    return this.result.startsWith("http") ? this.result : "";
   }
 }
 class AiAudio {

@@ -23,6 +23,10 @@ const AUTO_REVIEW_RESULT_START = "<!-- TOONFLOW:AUTO_REVIEW_RESULT_HANDLING:STAR
 const AUTO_REVIEW_RESULT_END = "<!-- TOONFLOW:AUTO_REVIEW_RESULT_HANDLING:END -->";
 const AUTO_REVIEW_SUPERVISION_START = "<!-- TOONFLOW:AUTO_REVIEW_SUPERVISION_RESULT:START -->";
 const AUTO_REVIEW_SUPERVISION_END = "<!-- TOONFLOW:AUTO_REVIEW_SUPERVISION_RESULT:END -->";
+const DERIVE_ROLE_DEFAULT_START = "<!-- TOONFLOW:DERIVE_ROLE_DEFAULT_COSTUME:START -->";
+const DERIVE_ROLE_DEFAULT_END = "<!-- TOONFLOW:DERIVE_ROLE_DEFAULT_COSTUME:END -->";
+const STORYBOARD_CLEAR_DECISION_START = "<!-- TOONFLOW:STORYBOARD_CLEAR_DECISION:START -->";
+const STORYBOARD_CLEAR_DECISION_END = "<!-- TOONFLOW:STORYBOARD_CLEAR_DECISION:END -->";
 
 const shotGroupingPresets = `## 文档增强：分镜拆分预设
 
@@ -53,6 +57,9 @@ const shotGroupingPresets = `## 文档增强：分镜拆分预设
 
 const storyboardTableExecution = `## 文档增强：分镜表执行规则
 
+- 构建或修复分镜表时，必须调用 \`set_storyboard_table\` 工具写入工作区，禁止只输出纯文本表格或只依赖 XML 流式标签。
+- 分镜表超过 40 行时必须分块调用：第一块 \`mode=replace\`，后续块 \`mode=append\`；每块都必须从完整行开始、到完整行结束，避免长输出被截断后只保存半张表。
+- 最后一块写入后，必须确认工具返回的总行数符合目标分镜数量；不符合时继续补写缺失行，不得返回“已完成”。
 - 激活 storyboard_table_techniques 后，必须应用其中的“文档增强：分镜拆分预设”。
 - 构建分镜表前先判断题材预设：默认 / 古风 / 女频 / 异能 / 悬疑 / 穿越 / 都市；判断依据为项目类型、scriptPlan、导演手册和剧本文本。
 - 分镜数量由内容密度决定，不为了压缩数量而牺牲关键动作、情绪、线索或对白落点。
@@ -87,6 +94,8 @@ const promptInferencePresets = `## 文档增强：通用镜头预设与通用推
 
 const storyboardPanelExecution = `## 文档增强：分镜面板执行规则
 
+- 当任务是“重新生成/重写/重做完整分镜面板”时，输出任何 \`<storyboardItem>\` 前必须先调用 \`clear_storyboard_panel\`，清空旧分镜面板，禁止把新分镜追加到旧分镜后面。
+- 只有用户明确要求“追加/补一条/插入某段分镜”时，才允许不清空并追加写入。
 - 写入 videoDesc 时，必须按“通用镜头预设与通用推理”补足动作轴：主动作、二级动作、微表情、身体姿态、焦点变化、镜头路径和情绪落点。
 - 每条 videoDesc 的时长必须等于 stoaryTable 对应行 duration；内部动作可按“开始/中段/结束”组织，但 XML 字段仍只写当前系统要求的一段文本。
 - 写入 prompt 时，仍使用当前系统的 @图N 资产绑定；多角色/多场景/多道具必须逐一引用，不能只保留第一张参考图。
@@ -134,6 +143,13 @@ const autoReviewDecisionResult = `### 自动审查结果处理
 5. 若监督层未输出明确结论：按评分兜底，A/B=PASS，C=AUTO_FIX，D=REWORK。
 6. 同一阶段自动修复/重做最多 2 轮，超过后停止并请求用户决策。`;
 
+const storyboardClearDecisionRules = `### 分镜面板清空规则
+
+- 用户要求“清空分镜面板 / 删除分镜面板分镜 / 重新生成分镜面板 / 重写分镜面板 / 重做阶段5”时，决策层必须调用 \`clear_storyboard_panel\` 或派发阶段5时明确要求执行层先调用该工具。
+- 完整重新生成阶段5前必须先清空旧分镜面板；否则前端会把新 \`storyboardItem\` 追加到旧分镜后面。
+- 仅当用户明确要求“追加分镜 / 插入分镜 / 补一条分镜”时，才允许保留旧分镜并追加。
+- 清空分镜面板只作用于当前项目和当前剧本，同时清理旧分镜关联、视频轨道和关联视频。`;
+
 const autoReviewSupervisionResult = `### 自动审查结论格式
 
 每次审核报告末尾必须输出以下区块，供决策层自动推进：
@@ -162,6 +178,15 @@ const autoReviewSupervisionResult = `### 自动审查结论格式
 - 指令正文控制在 100 字以内，便于决策层直接派发。
 - 如果是分镜表修复，必须明确修复范围（如“补齐缺失台词”“修正不存在的资产ID”“补场景资产ID”）。
 - 如果是导演规划修复，必须明确修复维度（如“补齐声音方向”“替换不存在资产引用”“补齐第X场规划”）。`;
+
+const deriveRoleDefaultCostumeRules = `## 系统增强：人物默认服装衍生硬约束
+
+- 角色父资产在本系统中默认视为“基础打底态/无服装无姿态底模”，不能直接作为分镜生产的常态角色参考图。
+- 每个 \`type=role\` 的父资产，如果当前 \`derive\` 为空，必须至少创建 1 个服装/妆造类衍生资产，作为后续分镜和视频生产的默认出镜形象。
+- 默认人物衍生优先级：剧本明确服装 > 资产描述暗示 > 项目题材常态服装。无法判断时创建“常服定装”。
+- 该默认衍生只补“完整服装、发型、基础妆造、身份气质”，必须保持自然站立四视图，不创建临时动作、表情、单镜姿态。
+- 不得因为“剧本没有明确写服装”而跳过人物默认衍生；父资产是底模时，缺少服装信息本身就是需要补齐的生产缺口。
+- 已存在任意人物衍生时不重复补默认衍生；如剧本后续出现礼服、盔甲、破损、异化等稳定状态，再按需追加。`;
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -275,6 +300,12 @@ function patchDecisionAgentSkill(content: string) {
     "### 调度决策树",
     "### 自动审查结果处理",
   );
+  next = replaceSectionBefore(
+    next,
+    { start: STORYBOARD_CLEAR_DECISION_START, end: STORYBOARD_CLEAR_DECISION_END, body: storyboardClearDecisionRules },
+    "### 调度决策树",
+    "### 分镜面板清空规则",
+  );
 
   return next;
 }
@@ -346,6 +377,9 @@ export async function patchProductionPromptPresetsFromDocs() {
     ]),
     patchSkillFile("production_execution_director_plan.md", [
       { start: DIRECTOR_PRESET_START, end: DIRECTOR_PRESET_END, body: directorCameraPresets },
+    ]),
+    patchSkillFile("production_execution_derive_assets.md", [
+      { start: DERIVE_ROLE_DEFAULT_START, end: DERIVE_ROLE_DEFAULT_END, body: deriveRoleDefaultCostumeRules },
     ]),
     patchSkillFileWithTransform("production_agent_decision.md", patchDecisionAgentSkill),
     patchSkillFileWithTransform("production_agent_supervision.md", patchSupervisionAgentSkill),
