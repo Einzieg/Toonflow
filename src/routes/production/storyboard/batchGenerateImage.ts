@@ -5,8 +5,30 @@ import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { getReferenceImageBudget, urlToCompressedBase64 } from "@/utils/vm";
 import { assetItemSchema } from "@/agents/productionAgent/tools";
+import { resolveEffectiveStoryboardAssetReferences } from "@/utils/effectiveAssetReference";
+import { buildStoryboardImagePrompt } from "@/utils/assetsPrompt";
 const router = express.Router();
 export type AssetData = z.infer<typeof assetItemSchema>;
+const DEFAULT_IMAGE_CONCURRENCY = 10;
+
+function normalizeImageConcurrency(value: number | undefined) {
+  if (value == null || value === 5) return DEFAULT_IMAGE_CONCURRENCY;
+  return value;
+}
+
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const item = items[nextIndex++];
+        await worker(item);
+      }
+    }),
+  );
+}
 
 export default router.post(
   "/",
@@ -21,13 +43,12 @@ export default router.post(
       storyboardIds,
       projectId,
       scriptId,
-      concurrentCount = 5,
     }: {
       storyboardIds: number[];
       projectId: number;
       scriptId: number;
-      concurrentCount: number;
     } = req.body;
+    const concurrentCount = normalizeImageConcurrency(req.body.concurrentCount);
     if (!storyboardIds || storyboardIds.length === 0) return res.status(400).send(error("storyboardIds不能为空"));
     const finalStoryboardIds: number[] = storyboardIds || [];
     // 显式发起分镜生图时，以请求的 storyboardIds 为准；只跳过没有提示词的分镜。
@@ -50,20 +71,19 @@ export default router.post(
     const projectSettingData = await u.db("o_project").where("id", projectId).select("imageModel", "imageQuality", "artStyle", "videoRatio").first();
 
     const storyboardData = await u.db("o_storyboard").where("scriptId", scriptId).whereIn("id", finalStoryboardIds);
-    const assetData = await u
-      .db("o_assets")
-      .leftJoin("o_assets2Storyboard", "o_assets.id", "o_assets2Storyboard.assetId")
-      .whereIn("o_assets2Storyboard.storyboardId", finalStoryboardIds)
-      .orderBy("o_assets2Storyboard.storyboardId", "asc")
-      .orderBy("o_assets2Storyboard.rowid", "asc")
-      .select("o_assets2Storyboard.storyboardId", "o_assets.imageId");
+    const assetData = await resolveEffectiveStoryboardAssetReferences(finalStoryboardIds);
 
     const assetRecord: Record<number, number[]> = {};
+    const assetIdRecord: Record<number, number[]> = {};
     assetData.forEach((item: any) => {
       if (!assetRecord[item.storyboardId]) {
         assetRecord[item.storyboardId] = [];
       }
-      assetRecord[item.storyboardId].push(item.imageId);
+      if (!assetIdRecord[item.storyboardId]) {
+        assetIdRecord[item.storyboardId] = [];
+      }
+      assetIdRecord[item.storyboardId].push(item.id);
+      if (Number.isInteger(item.imageId)) assetRecord[item.storyboardId].push(item.imageId);
     });
 
     res.status(200).send(
@@ -71,7 +91,7 @@ export default router.post(
         storyboardData.map((i) => ({
           id: i.id,
           prompt: i.prompt,
-          associateAssetsIds: assetRecord[i.id!],
+          associateAssetsIds: assetIdRecord[i.id!],
           src: null,
           state: i.state,
           videoDesc: i.videoDesc,
@@ -80,64 +100,61 @@ export default router.post(
       ),
     );
     const generateTask = async (item: (typeof storyboardData)[number]) => {
-      const repeloadObj = {
-        prompt: item.prompt!,
-        size: projectSettingData?.imageQuality as "1K" | "2K" | "4K",
-        aspectRatio: projectSettingData?.videoRatio as `${number}:${number}`,
-      };
+      try {
+        const finalPrompt = buildStoryboardImagePrompt(item.prompt!, projectSettingData?.artStyle);
+        const repeloadObj = {
+          prompt: finalPrompt,
+          size: projectSettingData?.imageQuality as "1K" | "2K" | "4K",
+          aspectRatio: projectSettingData?.videoRatio as `${number}:${number}`,
+        };
 
-      await u.Ai.Image(projectSettingData?.imageModel as `${string}:${string}`)
-        .run(
+        const imageCls = await u.Ai.Image(projectSettingData?.imageModel as `${string}:${string}`).run(
           {
             referenceList: await getAssetsImageBase64(assetRecord[item.id!] || []),
             ...repeloadObj,
           },
           {
             taskClass: "生成分镜图片",
-            describe: "分镜图片生成",
+            describe: `分镜图片生成，画风：${projectSettingData?.artStyle || "未指定"}，提示词：${finalPrompt}`,
             relatedObjects: JSON.stringify(repeloadObj),
             projectId: projectId,
           },
-        )
-        .then(async (imageCls) => {
-          const savePath = `/${projectId}/assets/${scriptId}/${u.uuid()}.jpg`;
-          await imageCls.save(savePath);
-          await u.db("o_storyboard").where("id", item.id).update({
-            filePath: savePath,
-            state: "已完成",
-            reason: "",
-          });
-        })
-        .catch(async (e) => {
-          const message = u.error(e).message;
-          console.error("[storyboard.batchGenerateImage] image generation failed", {
-            id: item.id,
-            index: item.index,
-            projectId,
-            scriptId,
-            message,
-          });
-          await u
-            .db("o_storyboard")
-            .where("id", item.id)
-            .update({
-              filePath: "",
-              reason: message,
-              state: "生成失败",
-            });
+        );
+
+        const savePath = `/${projectId}/assets/${scriptId}/${u.uuid()}.jpg`;
+        await imageCls.save(savePath);
+        await u.db("o_storyboard").where("id", item.id).update({
+          filePath: savePath,
+          state: "已完成",
+          reason: "",
         });
+      } catch (e) {
+        const message = u.error(e).message;
+        console.error("[storyboard.batchGenerateImage] image generation failed", {
+          id: item.id,
+          index: item.index,
+          projectId,
+          scriptId,
+          message,
+        });
+        await u
+          .db("o_storyboard")
+          .where("id", item.id)
+          .update({
+            filePath: "",
+            reason: message,
+            state: "生成失败",
+          });
+      }
     };
 
-    // 按 concurrentCount 控制并发数，分批执行；跳过没有提示词的分镜
+    // 固定并发 worker 队列：单个慢任务不会卡住后续批次。
     const generateList = storyboardData.filter((item) => item.prompt?.trim());
     const skippedIds = storyboardData.filter((item) => !item.prompt?.trim()).map((item) => item.id);
     if (skippedIds.length > 0) {
       console.log("[storyboard.batchGenerateImage] skip storyboards without prompt:", skippedIds);
     }
-    for (let i = 0; i < generateList.length; i += concurrentCount) {
-      const batch = generateList.slice(i, i + concurrentCount);
-      await Promise.all(batch.map(generateTask));
-    }
+    await runWithConcurrency(generateList, concurrentCount, generateTask);
   },
 );
 async function getAssetsImageBase64(imageIds: number[]) {

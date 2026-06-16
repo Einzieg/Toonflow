@@ -80,6 +80,20 @@ async function syncStoryboardTracks(projectId: number, scriptId: number) {
       track: segment.trackLabel,
     });
   }
+
+  const existingTrackRows = await u.db("o_videoTrack").where({ projectId, scriptId }).select("id");
+  const staleTrackIds = existingTrackRows.map((item: any) => Number(item.id)).filter((id) => Number.isInteger(id) && !reusedTrackIds.has(id));
+  if (staleTrackIds.length) {
+    const trackIdsWithVideos = new Set(
+      (await u.db("o_video").where({ projectId, scriptId }).whereIn("videoTrackId", staleTrackIds).select("videoTrackId")).map((item: any) =>
+        Number(item.videoTrackId),
+      ),
+    );
+    const emptyStaleTrackIds = staleTrackIds.filter((trackId) => !trackIdsWithVideos.has(trackId));
+    if (emptyStaleTrackIds.length) {
+      await u.db("o_videoTrack").where({ projectId, scriptId }).whereIn("id", emptyStaleTrackIds).del();
+    }
+  }
 }
 
 export default router.post(
@@ -99,19 +113,27 @@ export default router.post(
     ),
     scriptId: z.number(),
     projectId: z.number(),
+    replaceAll: z.boolean().optional(),
   }),
   async (req, res) => {
-    const { data: rawData, scriptId, projectId }: { data: InputStoryboardItem[]; scriptId: number; projectId: number } = req.body;
+    const {
+      data: rawData,
+      scriptId,
+      projectId,
+      replaceAll = false,
+    }: { data: InputStoryboardItem[]; scriptId: number; projectId: number; replaceAll?: boolean } = req.body;
     if (!rawData.length) return res.status(400).send({ success: false, message: "数据不能为空" });
     const data = expandStoryboardItemsForDuration<InputStoryboardItem>(rawData);
     const projectAssets: StoryboardAssetProjectAsset[] = await u.db("o_assets").where({ projectId }).select("id", "name", "type");
-    const replaceAll = rawData.length > 1;
     const existingStoryboards: ExistingStoryboardItem[] = await u
       .db("o_storyboard")
       .where({ scriptId, projectId })
       .select("id", "track", "trackId", "prompt", "duration", "videoDesc", "index");
 
     const existingStoryboardIds = existingStoryboards.map((item: any) => item.id).filter(Boolean);
+    console.log(
+      `[storyboard.batchAdd] projectId=${projectId} scriptId=${scriptId} rawCount=${rawData.length} expandedCount=${data.length} replaceAll=${replaceAll}`,
+    );
     if (replaceAll && existingStoryboardIds.length) {
       await u.db("o_assets2Storyboard").whereIn("storyboardId", existingStoryboardIds).del();
       await u.db("o_storyboard").whereIn("id", existingStoryboardIds).del();

@@ -241,7 +241,7 @@ function handleCancel() {
   closeModal();
 }
 async function processBatch<T>(list: T[], handler: (item: T) => Promise<void>) {
-  const batchSize = otherSetting.value.assetsBatchGenereateSize || 5; // 从设置中获取批量生成的大小，默认为5
+  const batchSize = otherSetting.value.assetsBatchGenereateSize || 10; // 从设置中获取批量生成的大小，默认为10
   for (let i = 0; i < list.length; i += batchSize) {
     await Promise.all(list.slice(i, i + batchSize).map(handler));
   }
@@ -299,7 +299,7 @@ async function handleBatchGeneratePrompt() {
   }
   promptGenerateCancel.value = false;
   textLoading.value = true;
-  const batchSize = otherSetting.value.assetsBatchGenereateSize || 5; // 从设置中获取批量生成的大小，默认为5
+  const batchSize = otherSetting.value.assetsBatchGenereateSize || 10; // 从设置中获取批量生成的大小，默认为10
   try {
     for (let i = 0; i < selectedAssets.length; i += batchSize) {
       if (promptGenerateCancel.value) throw new Error($t('workbench.assets.batch.promptGenCancelled'));
@@ -358,7 +358,7 @@ async function handleBatchGenerateImage() {
   }
   imageGenerateCancel.value = false;
   imageLoading.value = true;
-  const batchSize = otherSetting.value.assetsBatchGenereateSize || 5; // 从设置中获取批量生成的大小，默认为5
+  const batchSize = otherSetting.value.assetsBatchGenereateSize || 10; // 从设置中获取批量生成的大小，默认为10
   try {
     for (let i = 0; i < selectedAssets.length; i += batchSize) {
       if (imageGenerateCancel.value) throw new Error($t('workbench.assets.batch.promptGenCancelled'));

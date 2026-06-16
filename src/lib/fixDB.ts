@@ -74,6 +74,15 @@ function patchVolcengineVendorRemoteVideoUrl() {
 
   nextCode = nextCode.replace(/@version 2\.[456]/, "@version 2.7");
   nextCode = nextCode.replace(/version:\s*"2\.[456]"/, 'version: "2.7"');
+  const seedance2Durations = "[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]";
+  nextCode = nextCode.replace(
+    /(modelName:\s*"doubao-seedance-2-0-260128"[\s\S]*?durationResolutionMap:\s*\[\{\s*duration:\s*)\[[^\]]*\](,\s*resolution:\s*\["480p",\s*"720p",\s*"1080p"\]\s*\}\])/m,
+    `$1${seedance2Durations}$2`,
+  );
+  nextCode = nextCode.replace(
+    /(modelName:\s*"doubao-seedance-2-0-fast-260128"[\s\S]*?durationResolutionMap:\s*\[\{\s*duration:\s*)\[[^\]]*\](,\s*resolution:\s*\["480p",\s*"720p",\s*"1080p"\]\s*\}\])/m,
+    `$1${seedance2Durations}$2`,
+  );
 
   if (!nextCode.includes("preserveRemoteUrl?: boolean")) {
     nextCode = nextCode.replace(
@@ -226,6 +235,10 @@ export default async (knex: Knex): Promise<void> => {
       });
     }
   };
+  const createTableIfNotExists = async (tableName: string, builder: (table: Knex.CreateTableBuilder) => void) => {
+    if (await knex.schema.hasTable(tableName)) return;
+    await knex.schema.createTable(tableName, builder);
+  };
   await recoverMissingProjects(knex);
   await patchProductionPromptPresetsFromDocs();
   //矫正因软件异常退出导致的状态不一致问题
@@ -264,6 +277,229 @@ export default async (knex: Knex): Promise<void> => {
   await addColumn("o_video", "localSaveState", "text");
   await addColumn("o_video", "localSaveErrorReason", "text");
   await addColumn("o_video", "externalTaskId", "text");
+  await createTableIfNotExists("o_storyboardBoard", (table) => {
+    table.integer("id").notNullable();
+    table.integer("projectId");
+    table.integer("scriptId");
+    table.text("storyboardIds");
+    table.integer("startIndex");
+    table.integer("endIndex");
+    table.text("filePath");
+    table.text("thumbPath");
+    table.text("layout");
+    table.text("ratio");
+    table.integer("itemsPerBoard");
+    table.text("labelMode");
+    table.text("shotScript");
+    table.text("imagePrompt");
+    table.text("imageModel");
+    table.integer("targetDuration");
+    table.text("sourceType");
+    table.text("sourceHash");
+    table.text("state");
+    table.text("errorReason");
+    table.integer("createTime");
+    table.integer("updateTime");
+    table.primary(["id"]);
+    table.unique(["id"]);
+  });
+  await addColumn("o_storyboardBoard", "shotScript", "text");
+  await addColumn("o_storyboardBoard", "imagePrompt", "text");
+  await addColumn("o_storyboardBoard", "imageModel", "text");
+  await addColumn("o_storyboardBoard", "targetDuration", "integer");
+  await addColumn("o_storyboardBoard", "sourceType", "text");
+  await createTableIfNotExists("o_storyboardBoardVideo", (table) => {
+    table.integer("id").notNullable();
+    table.integer("boardId");
+    table.integer("projectId");
+    table.integer("scriptId");
+    table.integer("videoId");
+    table.text("referenceMode");
+    table.text("model");
+    table.text("prompt");
+    table.integer("duration");
+    table.text("resolution");
+    table.text("state");
+    table.text("errorReason");
+    table.integer("createTime");
+    table.integer("updateTime");
+    table.primary(["id"]);
+    table.unique(["id"]);
+  });
+  await createTableIfNotExists("o_storyboardFirstScript", (table) => {
+    table.integer("id").notNullable();
+    table.integer("projectId");
+    table.integer("scriptId");
+    table.text("inputHash");
+    table.text("shotScriptHash");
+    table.integer("scriptRevision");
+    table.text("promptVersion");
+    table.text("jobToken");
+    table.text("scriptContentSnapshot");
+    table.text("projectName");
+    table.text("projectType");
+    table.text("artStyle");
+    table.text("directorManual");
+    table.integer("targetDuration");
+    table.integer("segmentCount");
+    table.text("shotScript");
+    table.text("assetSnapshot");
+    table.text("state");
+    table.text("errorReason");
+    table.integer("createTime");
+    table.integer("updateTime");
+    table.primary(["id"]);
+    table.unique(["id"]);
+    table.index(["projectId", "scriptId"]);
+    table.index(["projectId", "scriptId", "inputHash"]);
+    table.index(["state"]);
+  });
+  await createTableIfNotExists("o_storyboardFirstImage", (table) => {
+    table.integer("id").notNullable();
+    table.integer("projectId");
+    table.integer("scriptId");
+    table.integer("firstScriptId");
+    table.integer("scriptRevision");
+    table.text("shotScriptHash");
+    table.text("shotScriptSnapshot");
+    table.text("filePath");
+    table.text("thumbPath");
+    table.text("imagePrompt");
+    table.text("imageModel");
+    table.text("imageQuality");
+    table.text("ratio");
+    table.text("imageSourceHash");
+    table.text("assetHash");
+    table.text("referenceSnapshot");
+    table.integer("version");
+    table.integer("isCurrent");
+    table.integer("invalidatedAt");
+    table.text("jobToken");
+    table.text("state");
+    table.text("errorReason");
+    table.integer("createTime");
+    table.integer("updateTime");
+    table.primary(["id"]);
+    table.unique(["id"]);
+    table.index(["projectId", "scriptId"]);
+    table.index(["firstScriptId"]);
+    table.index(["firstScriptId", "isCurrent"]);
+    table.index(["imageSourceHash"]);
+    table.index(["state"]);
+  });
+  await createTableIfNotExists("o_storyboardFirstVideo", (table) => {
+    table.integer("id").notNullable();
+    table.integer("projectId");
+    table.integer("scriptId");
+    table.integer("firstScriptId");
+    table.integer("firstImageId");
+    table.integer("videoId");
+    table.text("imageSourceHash");
+    table.integer("firstImageVersion");
+    table.text("model");
+    table.text("prompt");
+    table.integer("duration");
+    table.text("resolution");
+    table.text("aspectRatio");
+    table.integer("audio");
+    table.text("jobToken");
+    table.text("state");
+    table.text("errorReason");
+    table.integer("createTime");
+    table.integer("updateTime");
+    table.primary(["id"]);
+    table.unique(["id"]);
+    table.index(["projectId", "scriptId"]);
+    table.index(["firstImageId"]);
+    table.index(["videoId"]);
+    table.index(["state"]);
+  });
+  await addColumn("o_storyboardFirstScript", "projectId", "integer");
+  await addColumn("o_storyboardFirstScript", "scriptId", "integer");
+  await addColumn("o_storyboardFirstScript", "inputHash", "text");
+  await addColumn("o_storyboardFirstScript", "shotScriptHash", "text");
+  await addColumn("o_storyboardFirstScript", "scriptRevision", "integer");
+  await addColumn("o_storyboardFirstScript", "promptVersion", "text");
+  await addColumn("o_storyboardFirstScript", "jobToken", "text");
+  await addColumn("o_storyboardFirstScript", "scriptContentSnapshot", "text");
+  await addColumn("o_storyboardFirstScript", "projectName", "text");
+  await addColumn("o_storyboardFirstScript", "projectType", "text");
+  await addColumn("o_storyboardFirstScript", "artStyle", "text");
+  await addColumn("o_storyboardFirstScript", "directorManual", "text");
+  await addColumn("o_storyboardFirstScript", "targetDuration", "integer");
+  await addColumn("o_storyboardFirstScript", "segmentCount", "integer");
+  await addColumn("o_storyboardFirstScript", "shotScript", "text");
+  await addColumn("o_storyboardFirstScript", "assetSnapshot", "text");
+  await addColumn("o_storyboardFirstScript", "state", "text");
+  await addColumn("o_storyboardFirstScript", "errorReason", "text");
+  await addColumn("o_storyboardFirstScript", "createTime", "integer");
+  await addColumn("o_storyboardFirstScript", "updateTime", "integer");
+
+  await addColumn("o_storyboardFirstImage", "projectId", "integer");
+  await addColumn("o_storyboardFirstImage", "scriptId", "integer");
+  await addColumn("o_storyboardFirstImage", "firstScriptId", "integer");
+  await addColumn("o_storyboardFirstImage", "scriptRevision", "integer");
+  await addColumn("o_storyboardFirstImage", "shotScriptHash", "text");
+  await addColumn("o_storyboardFirstImage", "shotScriptSnapshot", "text");
+  await addColumn("o_storyboardFirstImage", "filePath", "text");
+  await addColumn("o_storyboardFirstImage", "thumbPath", "text");
+  await addColumn("o_storyboardFirstImage", "imagePrompt", "text");
+  await addColumn("o_storyboardFirstImage", "imageModel", "text");
+  await addColumn("o_storyboardFirstImage", "imageQuality", "text");
+  await addColumn("o_storyboardFirstImage", "ratio", "text");
+  await addColumn("o_storyboardFirstImage", "imageSourceHash", "text");
+  await addColumn("o_storyboardFirstImage", "assetHash", "text");
+  await addColumn("o_storyboardFirstImage", "referenceSnapshot", "text");
+  await addColumn("o_storyboardFirstImage", "version", "integer");
+  await addColumn("o_storyboardFirstImage", "isCurrent", "integer");
+  await addColumn("o_storyboardFirstImage", "invalidatedAt", "integer");
+  await addColumn("o_storyboardFirstImage", "jobToken", "text");
+  await addColumn("o_storyboardFirstImage", "state", "text");
+  await addColumn("o_storyboardFirstImage", "errorReason", "text");
+  await addColumn("o_storyboardFirstImage", "createTime", "integer");
+  await addColumn("o_storyboardFirstImage", "updateTime", "integer");
+
+  await addColumn("o_storyboardFirstVideo", "projectId", "integer");
+  await addColumn("o_storyboardFirstVideo", "scriptId", "integer");
+  await addColumn("o_storyboardFirstVideo", "firstScriptId", "integer");
+  await addColumn("o_storyboardFirstVideo", "firstImageId", "integer");
+  await addColumn("o_storyboardFirstVideo", "videoId", "integer");
+  await addColumn("o_storyboardFirstVideo", "imageSourceHash", "text");
+  await addColumn("o_storyboardFirstVideo", "firstImageVersion", "integer");
+  await addColumn("o_storyboardFirstVideo", "model", "text");
+  await addColumn("o_storyboardFirstVideo", "prompt", "text");
+  await addColumn("o_storyboardFirstVideo", "duration", "integer");
+  await addColumn("o_storyboardFirstVideo", "resolution", "text");
+  await addColumn("o_storyboardFirstVideo", "aspectRatio", "text");
+  await addColumn("o_storyboardFirstVideo", "audio", "integer");
+  await addColumn("o_storyboardFirstVideo", "jobToken", "text");
+  await addColumn("o_storyboardFirstVideo", "state", "text");
+  await addColumn("o_storyboardFirstVideo", "errorReason", "text");
+  await addColumn("o_storyboardFirstVideo", "createTime", "integer");
+  await addColumn("o_storyboardFirstVideo", "updateTime", "integer");
+  await db("o_storyboardFirstScript").where("state", "生成中").update({
+    state: "生成失败",
+    errorReason: "软件退出导致失败",
+    updateTime: Date.now(),
+  });
+  await db("o_storyboardFirstImage").where("state", "生成中").update({
+    state: "生成失败",
+    errorReason: "软件退出导致失败",
+    updateTime: Date.now(),
+  });
+  const runningFirstVideos = await db("o_storyboardFirstVideo").where("state", "生成中").select("videoId");
+  const runningFirstVideoIds = runningFirstVideos.map((item: any) => Number(item.videoId)).filter((id: number) => Number.isInteger(id));
+  await db("o_storyboardFirstVideo").where("state", "生成中").update({
+    state: "生成失败",
+    errorReason: "软件退出导致失败",
+    updateTime: Date.now(),
+  });
+  if (runningFirstVideoIds.length) {
+    await db("o_video").whereIn("id", runningFirstVideoIds).where("state", "生成中").update({
+      state: "生成失败",
+      errorReason: "软件退出导致失败",
+    });
+  }
   // 添加新字段
   await addColumn("o_agentDeploy", "type", "string");
   // 添加新字段

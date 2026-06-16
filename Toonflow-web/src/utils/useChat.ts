@@ -318,6 +318,36 @@ export function useChat(options: UseChatOptions) {
     aiMessage.content?.forEach((content) => syncXmlData(messageId, content, messageStatus ?? aiMessage.status));
   };
 
+  const isTerminalStatus = (value?: ChatMessageStatus) => value === "complete" || value === "error" || value === "stop";
+
+  const markMessageTerminal = (messageId: string, terminalStatus: ChatMessageStatus) => {
+    const msg = findMessage(messageId);
+    if (!msg) return;
+
+    msg.status = terminalStatus;
+    if (msg.role === "assistant") {
+      const aiMsg = msg as AIMessage;
+      aiMsg.content?.forEach((content) => {
+        if (content.status === "pending" || content.status === "streaming") {
+          content.status = terminalStatus;
+        }
+      });
+      syncMessageXmlData(messageId, aiMsg, terminalStatus);
+    }
+
+    if (currentMessageId.value === messageId) {
+      currentMessageId.value = null;
+      status.value = "idle";
+    }
+  };
+
+  const stopCurrentMessage = () => {
+    const id = currentMessageId.value;
+    if (id) markMessageTerminal(id, "stop");
+    currentMessageId.value = null;
+    status.value = "idle";
+  };
+
   // 深度合并工具
   const deepMerge = <T extends Record<string, any>>(target: T, source: Partial<T>): T => {
     if (typeof source !== "object" || source === null) return source as T;
@@ -461,7 +491,11 @@ export function useChat(options: UseChatOptions) {
       if (!msg) return;
 
       if (data.status) {
-        msg.status = data.status;
+        if (isTerminalStatus(data.status)) {
+          markMessageTerminal(data.id, data.status);
+        } else {
+          msg.status = data.status;
+        }
       }
 
       if (data.ext) {
@@ -485,12 +519,7 @@ export function useChat(options: UseChatOptions) {
         status.value = "streaming";
       }
 
-      if (data.status === "complete" || data.status === "error" || data.status === "stop") {
-        if (currentMessageId.value === data.id) {
-          currentMessageId.value = null;
-          status.value = "idle";
-        }
-      }
+      if (isTerminalStatus(data.status)) markMessageTerminal(data.id, data.status);
     });
 
     // 添加内容块 - 修复：不要在这里改变消息状态
@@ -556,6 +585,7 @@ export function useChat(options: UseChatOptions) {
     socket.value.on("disconnect", (reason) => {
       connected.value = false;
       connecting.value = false;
+      stopCurrentMessage();
       onDisconnect?.();
       console.log("[Chat Disconnected]", reason);
     });
@@ -563,6 +593,7 @@ export function useChat(options: UseChatOptions) {
     socket.value.on("connect_error", (error) => {
       connected.value = false;
       connecting.value = false;
+      stopCurrentMessage();
       console.error("[Chat Connect Error]", error);
     });
   };

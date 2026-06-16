@@ -4,6 +4,7 @@ import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { getRenderableVideoSrc, normalizeVideoState } from "@/utils/videoSource";
+import { resolveEffectiveStoryboardAssetReferences } from "@/utils/effectiveAssetReference";
 const router = express.Router();
 
 interface VideoItem {
@@ -88,15 +89,7 @@ export default router.post(
     const otherDataMap: Record<number, any[]> = {};
     if (isRef) {
       const storyIds = storyboardList.map((s) => s.id);
-      const assetDatas = await u
-        .db("o_assets2Storyboard")
-        .leftJoin("o_assets", "o_assets2Storyboard.assetId", "o_assets.id")
-        .leftJoin({ parentAsset: "o_assets" }, "o_assets.assetsId", "parentAsset.id")
-        .leftJoin("o_image", "o_image.id", "o_assets.imageId")
-        .whereIn("o_assets2Storyboard.storyboardId", storyIds as number[])
-        .orderBy("o_assets2Storyboard.storyboardId", "asc")
-        .orderBy("o_assets2Storyboard.rowid", "asc")
-        .select("o_assets.*", "o_image.filePath", "o_assets2Storyboard.storyboardId", "parentAsset.volcengineAssetUri as parentVolcengineAssetUri");
+      const assetDatas = await resolveEffectiveStoryboardAssetReferences(storyIds as number[]);
 
       await Promise.all(
         assetDatas.map(async (i) => {

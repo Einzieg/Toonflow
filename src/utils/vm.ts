@@ -49,6 +49,7 @@ export default function runCode(code: string, vendor?: Record<string, any>) {
     exports,
     axios,
     FormData,
+    Buffer,
     logger,
     setTimeout,
     clearTimeout,

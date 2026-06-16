@@ -1,12 +1,17 @@
 export default function replaceUrl(url: string): string {
-    if (typeof url !== 'string' || !url.trim()) return '';
-    let cleanedPath = '';
-    try {
-        const pathname = new URL(url).pathname;
-        cleanedPath = pathname.replace(/^\/oss/, '').replace(/^\/smallImage/, '');
-    } catch (e) {
-        // 如果不是有效的URL，则直接返回原字符串
-        cleanedPath = url;
-    }
-    return cleanedPath;
+  if (typeof url !== "string" || !url.trim()) return "";
+
+  let pathname = url.trim();
+  try {
+    pathname = new URL(pathname, "http://toonflow.local").pathname;
+  } catch {
+    // 非 URL 字符串按本地 OSS 路径处理。
+  }
+
+  let cleanedPath = decodeURIComponent(pathname).replace(/\\/g, "/").replace(/^\/+/, "");
+  while (/^(oss-preview|oss|smallImage)\//.test(cleanedPath)) {
+    cleanedPath = cleanedPath.replace(/^(oss-preview|oss|smallImage)\//, "");
+  }
+
+  return cleanedPath ? `/${cleanedPath}` : "";
 }

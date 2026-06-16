@@ -3,6 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { cleanupStoryboardFirstByProject } from "@/utils/storyboardFirstCleanup";
 const router = express.Router();
 
 // 删除项目
@@ -13,6 +14,7 @@ export default router.post(
   }),
   async (req, res) => {
     const { id } = req.body;
+    await cleanupStoryboardFirstByProject(id);
     //删除项目
     await u.db("o_project").where("id", id).delete();
     await u.db("o_agentWorkData").where("projectId", id).delete();
@@ -37,6 +39,8 @@ export default router.post(
       await u.db("o_assets2Storyboard").whereIn("storyboardId", storyboardIds).delete();
     }
     await u.db("o_storyboard").where("projectId", id).delete();
+    await u.db("o_storyboardBoardVideo").where("projectId", id).delete();
+    await u.db("o_storyboardBoard").where("projectId", id).delete();
     //删除需要删除资产的归属图片
     const assetsData = await u.db("o_assets").where("projectId", id).select("id");
     const assetsIds = assetsData.map((item: any) => item.id);

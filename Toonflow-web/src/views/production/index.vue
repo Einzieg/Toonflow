@@ -33,6 +33,28 @@
     <template #node-workbench="props">
       <workbench v-memo="[workbenchNodeMemo]" :id="props.id" v-model="flowData.workbench" :handleIds="props.data.handleIds" />
     </template>
+    <template #node-storyboardFirstScript="props">
+      <storyboardFirstScript
+        :id="props.id"
+        :project-id="Number(project?.id) || undefined"
+        :script-id="episodesId"
+        :handleIds="props.data.handleIds" />
+    </template>
+    <template #node-storyboardFirstImage="props">
+      <storyboardFirstImage
+        :id="props.id"
+        :project-id="Number(project?.id) || undefined"
+        :script-id="episodesId"
+        :handleIds="props.data.handleIds" />
+    </template>
+    <template #node-storyboardFirstVideo="props">
+      <storyboardFirstVideo
+        :id="props.id"
+        :project-id="Number(project?.id) || undefined"
+        :script-id="episodesId"
+        :project-video-model="project?.videoModel"
+        :handleIds="props.data.handleIds" />
+    </template>
     <!-- <template #node-poster="props">
       <poster :id="props.id" v-model="flowData.poster" :handleIds="props.data.handleIds" />
     </template> -->
@@ -99,6 +121,9 @@ import assets from "./node/assets.vue";
 import storyboardTable from "./node/storyboardTable.vue";
 import storyboard from "./node/storyboard.vue";
 import workbench from "./node/workbench.vue";
+import storyboardFirstScript from "./node/storyboardFirstScript.vue";
+import storyboardFirstImage from "./node/storyboardFirstImage.vue";
+import storyboardFirstVideo from "./node/storyboardFirstVideo.vue";
 import poster from "./node/poster.vue";
 import { useLayout } from "./utils/dagre";
 import { useFlowBuilder } from "./utils/flowBuilder";
@@ -190,6 +215,9 @@ const nodePositions = ref<Record<string, { x: number; y: number }>>({
   storyboardTable: { x: 1800, y: 0 },
   storyboard: { x: 2500, y: 0 },
   workbench: { x: 3000, y: 0 },
+  storyboardFirstScript: { x: 0, y: 900 },
+  storyboardFirstImage: { x: 600, y: 900 },
+  storyboardFirstVideo: { x: 1100, y: 900 },
   // poster: { x: 4500, y: 0 },
 });
 const { nodes, edges } = useFlowBuilder(nodePositions);
@@ -423,6 +451,22 @@ async function layoutGraph(direction: "LR" | "TB" = "LR") {
             break;
           }
         }
+      }
+    }
+
+    const storyboardFirstChain = ["storyboardFirstScript", "storyboardFirstImage", "storyboardFirstVideo"];
+    const storyboardFirstNodes = storyboardFirstChain.filter((id) => oldData.nodes.some((n) => n.id === id));
+    const assetsDim = dims.get("assets");
+    if (scriptNode && assetsNode && assetsDim && storyboardFirstNodes.length) {
+      let branchX = scriptNode.position.x;
+      const branchY = assetsNode.position.y + assetsDim.h + gap;
+      for (const id of storyboardFirstNodes) {
+        const node = oldData.nodes.find((n) => n.id === id);
+        const dim = dims.get(id);
+        if (!node || !dim) continue;
+        node.position.x = branchX;
+        node.position.y = branchY;
+        branchX += dim.w + gap;
       }
     }
   } else {

@@ -5,8 +5,15 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { buildAssetPrompt } from "@/utils/assetsPrompt";
 
 const router = express.Router();
+const DEFAULT_IMAGE_CONCURRENCY = 10;
+
+function normalizeImageConcurrency(value: number | undefined) {
+  if (value == null || value === 5) return DEFAULT_IMAGE_CONCURRENCY;
+  return value;
+}
 
 type AssetType = "role" | "scene" | "tool";
 
@@ -42,7 +49,16 @@ const assetTypeConfig: Record<AssetType, AssetTypeConfig> = {
   },
 };
 
-function buildPrompt(cfg: AssetTypeConfig, artStyle: string, name: string, prompt: string): string {
+function buildPrompt(cfg: AssetTypeConfig, type: AssetType, artStyle: string, name: string, describe: string, prompt: string, derivative: boolean): string {
+  const assetPrompt = buildAssetPrompt({
+    type,
+    name,
+    describe,
+    prompt,
+    artStyle,
+    derivative,
+  });
+
   return `
     请根据以下参数生成${cfg.promptTitle}：
 
@@ -51,7 +67,11 @@ function buildPrompt(cfg: AssetTypeConfig, artStyle: string, name: string, promp
 
     **${cfg.label}设定：**
     - 名称:${name},
-    - 提示词:${prompt},
+    - 核心描述:${describe || "无详细描述"},
+    - 已生成提示词:${prompt},
+
+    **最终生图约束：**
+    ${assetPrompt}
 
     请严格按照系统规范生成${cfg.promptEnd}。
   `;
@@ -68,6 +88,7 @@ const requestSchema = {
       type: z.enum(["role", "scene", "tool", "storyboard"]),
       name: z.string(),
       prompt: z.string(),
+      describe: z.string().optional().nullable(),
       base64: z.string().optional().nullable(),
     }),
   ),
@@ -79,6 +100,14 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
   // 1. 查询项目
   const project = await u.db("o_project").where("id", projectId).select("artStyle", "type", "intro").first();
   if (!project) return res.status(500).send(error("项目为空"));
+  const assetRows = await u
+    .db("o_assets")
+    .whereIn(
+      "id",
+      items.map((item: { id: number }) => item.id),
+    )
+    .select("id", "describe", "assetsId");
+  const assetInfoMap = new Map(assetRows.map((item: any) => [item.id, item]));
 
   // 2. 逐条插入 o_image 占位记录，收集 imageId 列表
   const totalNovelId: number[] = [];
@@ -93,9 +122,9 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
   }
 
   // 3. 后台异步并发生成，不阻塞响应
-  const limit = pLimit(concurrentCount ?? 1);
+  const limit = pLimit(normalizeImageConcurrency(concurrentCount));
 
-  const tasks = items.map((item: { id: number; type: string; name: string; prompt: string; base64: string | null | undefined }, index: number) =>
+  const tasks = items.map((item: { id: number; type: string; name: string; describe?: string | null; prompt: string; base64: string | null | undefined }, index: number) =>
     limit(async () => {
       const imageId = totalNovelId[index];
       const data = await u.db("o_image").where("id", imageId).select("state").first();
@@ -104,12 +133,15 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
       }
       const cfg = assetTypeConfig[item.type as AssetType];
       if (!cfg) return;
+      const assetInfo = assetInfoMap.get(item.id) as { describe?: string | null; assetsId?: number | null } | undefined;
+      const assetDescribe = item.describe ?? assetInfo?.describe ?? "";
+      const derivative = Boolean(assetInfo?.assetsId);
 
       await u.db("o_assets").where("id", item.id).update({ imageId });
 
       const imagePath = `/${projectId}/${cfg.dir}/${uuidv4()}.jpg`;
-      const userPrompt = buildPrompt(cfg, project.artStyle ?? "", item.name, item.prompt);
-      const describe = `生成${cfg.label}图，名称：${item.name}，提示词：${item.prompt}`;
+      const userPrompt = buildPrompt(cfg, item.type as AssetType, project.artStyle ?? "", item.name, assetDescribe, item.prompt, derivative);
+      const describe = `生成${cfg.label}图，名称：${item.name}，描述：${assetDescribe || "无详细描述"}，提示词：${item.prompt}`;
       const relatedObjects = { id: item.id, projectId, type: cfg.label };
       try {
         const aiImage = u.Ai.Image(model);

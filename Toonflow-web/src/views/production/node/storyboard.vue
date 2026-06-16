@@ -35,6 +35,11 @@
           {{ $t("workbench.production.node.storyboard.batchGenerateImage") }}
         </t-button>
       </div>
+      <storyboardBoardPanel
+        :project-id="Number(project?.id) || undefined"
+        :script-id="episodesId"
+        :storyboard="storyboard"
+        :project-video-model="project?.videoModel" />
     </div>
     <editImage v-model="visible" v-if="visible" :flowData="currentRow" type="storyboard" @save="save" />
     <t-image-viewer
@@ -50,6 +55,7 @@
 import { defineAsyncComponent } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import storyboardFrameItem from "./storyboardFrameItem.vue";
+import storyboardBoardPanel from "./storyboardBoardPanel.vue";
 import { LoadingPlugin } from "tdesign-vue-next";
 import { Handle, Position, type Edge } from "@vue-flow/core";
 import axios from "@/utils/axios";
@@ -187,6 +193,23 @@ async function batchGenerateImage() {
     LoadingPlugin(false);
   }
 }
+function resolveStoryboardAssetImage(id: number) {
+  const asset = props.assetsData.find((a) => a.id === id);
+  if (asset) {
+    if (asset.type === "role") {
+      const derivative = asset.derive?.find((d) => d.src);
+      if (derivative?.src) return derivative.src;
+    }
+    return asset.src || "";
+  }
+
+  for (const parentAsset of props.assetsData) {
+    const derivative = parentAsset.derive?.find((d) => d.id === id);
+    if (derivative?.src) return derivative.src;
+  }
+  return "";
+}
+
 function editStoryboaryImage(item: Storyboard, images: string[], insertAfterIndex: number | null = null) {
   currentRowStoryboardInfo.value = {
     id: insertAfterIndex == null ? item?.id! : null,
@@ -203,20 +226,12 @@ function editStoryboaryImage(item: Storyboard, images: string[], insertAfterInde
 
     if (item.associateAssetsIds && item.associateAssetsIds.length > 0) {
       const assetsImages: string[] = [];
+      const seenImages = new Set<string>();
       for (const id of item.associateAssetsIds) {
-        // 先查顶层 asset
-        const asset = props.assetsData.find((a) => a.id === id);
-        if (asset) {
-          if (asset.src) assetsImages.push(asset.src);
-          continue;
-        }
-        // 再查 derive
-        for (const a of props.assetsData) {
-          const derive = a.derive?.find((d) => d.id === id);
-          if (derive) {
-            if (derive.src) assetsImages.push(derive.src);
-            break;
-          }
+        const image = resolveStoryboardAssetImage(id);
+        if (image && !seenImages.has(image)) {
+          seenImages.add(image);
+          assetsImages.push(image);
         }
       }
       imagesPush = imagesPush.concat(assetsImages);

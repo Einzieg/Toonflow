@@ -3,6 +3,7 @@ import u from "@/utils";
 import * as zod from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { buildAssetPrompt } from "@/utils/assetsPrompt";
 const router = express.Router();
 
 
@@ -60,7 +61,19 @@ export default router.post(
     //获取到视觉手册
     const visualManual = await u.getArtPrompt(project.artStyle as string, "art_skills", config.visualManual);
     if (!visualManual) return res.status(500).send(error("视觉手册未定义"));
-    const systemPrompt = visualManual;
+    const promptGuard = buildAssetPrompt({
+      type: type as "role" | "scene" | "tool",
+      name,
+      describe,
+      artStyle: project.artStyle as string,
+      derivative: Boolean(assetsData.assetsId),
+    });
+    const systemPrompt = `${visualManual}
+
+额外硬约束：
+${promptGuard}
+
+必须把用户提供的${config.nameLabel}描述作为最高优先级视觉依据。不要用通用模板、默认性别、默认发型、默认服装或模型习惯覆盖描述。`;
     try {
       const { _output } = (await u.Ai.Text("universalAi").invoke({
         system: systemPrompt,
@@ -70,7 +83,11 @@ export default router.post(
             content: `**基础参数：**
       **${config.nameLabel}设定：**
       - ${config.nameLabel}名称:${name},
-      - ${config.nameLabel}描述:${describe},`,
+      - ${config.nameLabel}描述:${describe},
+
+      输出要求：
+      - 提示词必须显式吸收上述描述中的核心视觉特征。
+      - 如果系统模板与描述冲突，以描述为准。`,
           },
         ],
       })) as any;

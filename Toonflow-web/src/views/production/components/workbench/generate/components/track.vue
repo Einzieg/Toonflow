@@ -326,8 +326,11 @@ function batchGenText() {
  */
 function getTrackUploadInfo(track: TrackItem, filterEmpty = false) {
   const activeTrackId = trackList.value[activeTrackIndex.value]?.id;
-  const isSeedance2 = String(props.modelParmas.model || "").toLowerCase().includes("seedance-2-0");
-  const isUsableReference = (item: UploadItem | TrackMedia) => Boolean(item.src || item.volcengineAssetUri || (isSeedance2 && item.sources === "assets" && item.id));
+  const model = String(props.modelParmas.model || "").toLowerCase().replace(/\s+/g, "");
+  const isSeedance2 = model.includes("seedance") && (model.includes("seedance-2-0") || model.includes("seedance-2.0") || model.includes("seedance2.0"));
+  const useVolcengineAssetUri = model.startsWith("volcengine:") && isSeedance2;
+  const isUsableReference = (item: UploadItem | TrackMedia) =>
+    Boolean(item.src || (useVolcengineAssetUri && (item.volcengineAssetUri || (item.sources === "assets" && item.id))));
 
   if (track.id === activeTrackId) {
     const items = props.imageList as UploadItem[];
@@ -340,9 +343,15 @@ function getTrackUploadInfo(track: TrackItem, filterEmpty = false) {
 }
 /** 批量为已勾选轨道生成视频 */
 function batchGenVideo() {
+  const selectedCount = checkedTrackIds.value.length;
   const dlg = DialogPlugin.confirm({
     header: $t("workbench.generate.generateConfirm"),
-    body: $t("workbench.generate.generateVideosInBatches"),
+    body: [$t("workbench.generate.generateVideosInBatches"), $t("workbench.generate.batchGenerateConfirmMeta", { count: selectedCount })].join("\n"),
+    confirmBtn: $t("workbench.generate.confirmGenerate"),
+    cancelBtn: $t("workbench.generate.cancelGenerate"),
+    closeBtn: false,
+    closeOnEscKeydown: false,
+    closeOnOverlayClick: false,
     onConfirm: async () => {
       dlg.destroy();
       trackList.value

@@ -11,7 +11,8 @@
         <pre class="previewText">{{ scriptPreview }}</pre>
       </div>
     </div>
-    <Handle :id="props.handleIds.assets" type="source" :position="Position.Bottom" />
+    <Handle :id="props.handleIds.assets" type="source" :position="Position.Bottom" style="left: 35%" />
+    <Handle :id="props.handleIds.storyboardFirst" type="source" :position="Position.Bottom" style="left: 65%" />
   </t-card>
 
   <t-dialog
@@ -56,6 +57,7 @@ const props = defineProps<{
   handleIds: {
     assets: string;
     source: string;
+    storyboardFirst: string;
   };
 }>();
 

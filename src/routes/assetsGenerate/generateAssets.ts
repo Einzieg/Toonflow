@@ -4,6 +4,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { buildAssetPrompt } from "@/utils/assetsPrompt";
 
 const router = express.Router();
 
@@ -43,7 +44,16 @@ const assetTypeConfig: Record<AssetType, AssetTypeConfig> = {
 
 // ─── 构建生成提示词 ──────────────────────────────────────────
 
-function buildPrompt(cfg: AssetTypeConfig, artStyle: string, name: string, prompt: string): string {
+function buildPrompt(cfg: AssetTypeConfig, type: AssetType, artStyle: string, name: string, describe: string, prompt: string, derivative: boolean): string {
+  const assetPrompt = buildAssetPrompt({
+    type,
+    name,
+    describe,
+    prompt,
+    artStyle,
+    derivative,
+  });
+
   return `
     请根据以下参数生成${cfg.promptTitle}：
 
@@ -52,7 +62,11 @@ function buildPrompt(cfg: AssetTypeConfig, artStyle: string, name: string, promp
 
     **${cfg.label}设定：**
     - 名称:${name},
-    - 提示词:${prompt},
+    - 核心描述:${describe || "无详细描述"},
+    - 已生成提示词:${prompt},
+
+    **最终生图约束：**
+    ${assetPrompt}
 
     请严格按照系统规范生成${cfg.promptEnd}。
   `;
@@ -68,11 +82,12 @@ const requestSchema = {
   type: z.enum(["role", "scene", "tool", "storyboard"]),
   name: z.string(),
   prompt: z.string(),
+  describe: z.string().optional().nullable(),
   base64: z.string().optional().nullable(),
 };
 
 export default router.post("/", validateFields(requestSchema), async (req, res) => {
-  const { projectId, model, resolution, id, type, name, prompt, base64 } = req.body;
+  const { projectId, model, resolution, id, type, name, prompt, describe: requestDescribe, base64 } = req.body;
 
   // 1. 查询项目 & 获取类型配置
   const project = await u.db("o_project").where("id", projectId).select("artStyle", "type", "intro").first();
@@ -80,6 +95,9 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
 
   const cfg = assetTypeConfig[type as AssetType];
   if (!cfg) return res.status(400).send(error("不支持的类型"));
+  const assetData = await u.db("o_assets").where("id", id).select("describe", "assetsId").first();
+  const assetDescribe = requestDescribe ?? assetData?.describe ?? "";
+  const derivative = Boolean(assetData?.assetsId);
 
   // 2. 创建图片占位记录
   const [imageId] = await u.db("o_image").insert({
@@ -91,8 +109,8 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
 
   // 3. 准备生成参数
   const imagePath = `/${projectId}/${cfg.dir}/${uuidv4()}.jpg`;
-  const userPrompt = buildPrompt(cfg, project.artStyle!, name, prompt);
-  const describe = `生成${cfg.label}图，名称：${name}，提示词：${prompt}`;
+  const userPrompt = buildPrompt(cfg, type as AssetType, project.artStyle!, name, assetDescribe, prompt, derivative);
+  const describe = `生成${cfg.label}图，名称：${name}，描述：${assetDescribe || "无详细描述"}，提示词：${prompt}`;
   const relatedObjects = { id, projectId, type: cfg.label };
 
   try {

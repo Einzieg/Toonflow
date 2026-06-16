@@ -61,7 +61,8 @@ import promptEditor from "@/components/promptEditor.vue";
 import imageListCacheStore from "@/stores/imageListCache";
 
 const VIDEO_PROMPT_TIMEOUT = 5 * 60 * 1000;
-const FIXED_SEEDANCE_VIDEO_DURATION_SECONDS = 15;
+const GROK_VIDEO_SUPPORTED_DURATIONS = [6, 10] as const;
+const GROK_IMAGINE_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS = [6, 10, 15] as const;
 
 const { project } = storeToRefs(projectStore());
 const episodesId = inject<Ref<number>>("episodesId")!;
@@ -81,6 +82,7 @@ const modeOptions = ref<VideoModel>({
 
 const trackList = ref<TrackItem[]>([]); // 轨道列表
 const generatingMap = ref<Record<number, boolean>>({}); // trackId -> 是否正在提交生成请求
+let generateConfirmDialogOpen = false;
 
 const modelParmas = ref<ModelSetting>({
   mode: "",
@@ -94,14 +96,73 @@ const storyboardList = ref<StoryboardItem[]>([]); // 分镜列表
 
 /** 排序优先级：assets有图=0，storyboard有图=1，无图=2 */
 function getImageItemPriority(item: UploadItem): number {
-  if (item.volcengineAssetUri) return 0;
+  if (isVolcengineSeedance2Model(modelParmas.value.model, modeOptions.value.modelName) && item.volcengineAssetUri) return 0;
   if (item.src) return item.sources === "assets" ? 0 : 1;
   return 2;
 }
 
 function isUsableReferenceItem(item: UploadItem | TrackMedia | undefined) {
-  if (isFixedDurationSeedanceModel(modelParmas.value.model, modeOptions.value.modelName) && item?.sources === "assets" && item.id) return true;
-  return Boolean(item?.src || item?.volcengineAssetUri);
+  const useVolcengineAssetUri = isVolcengineSeedance2Model(modelParmas.value.model, modeOptions.value.modelName);
+  if (useVolcengineAssetUri && item?.sources === "assets" && item.id) return true;
+  return Boolean(item?.src || (useVolcengineAssetUri && item?.volcengineAssetUri));
+}
+
+function getCurrentTrackUploadData() {
+  if (modelParmas.value.mode === "text") return [];
+  const frameMode = ["startEndRequired", "endFrameOptional", "startFrameOptional"];
+  const preSliced = frameMode.includes(modelParmas.value.mode)
+    ? imageList.value.slice(0, 2)
+    : modelParmas.value.mode === "singleImage"
+      ? imageList.value.slice(0, 1)
+      : imageList.value;
+  const filtered = preSliced.filter((item) => isUsableReferenceItem(item) && item.id).map(({ id, sources }) => ({ id, sources }));
+  if (frameMode.includes(modelParmas.value.mode)) return filtered.slice(0, 2);
+  if (modelParmas.value.mode === "singleImage") return filtered.slice(0, 1);
+  return filtered;
+}
+
+function getModelDisplayName() {
+  const [, modelName] = String(modelParmas.value.model || "").split(/:(.+)/);
+  return modelName || modeOptions.value.modelName || modelParmas.value.model || "-";
+}
+
+function confirmGenerateVideo(trackIndex: number, referenceCount: number) {
+  if (generateConfirmDialogOpen) return Promise.resolve(false);
+  generateConfirmDialogOpen = true;
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let dlg: ReturnType<typeof DialogPlugin.confirm>;
+    const finish = (confirmed: boolean) => {
+      if (settled) return;
+      settled = true;
+      generateConfirmDialogOpen = false;
+      dlg?.destroy();
+      resolve(confirmed);
+    };
+
+    dlg = DialogPlugin.confirm({
+      header: $t("workbench.generate.generateConfirm"),
+      body: [
+        $t("workbench.generate.generateConfirmBody"),
+        $t("workbench.generate.generateConfirmTrack", { index: trackIndex + 1 }),
+        $t("workbench.generate.generateConfirmMeta", {
+          model: getModelDisplayName(),
+          duration: modelParmas.value.duration,
+          resolution: modelParmas.value.resolution,
+          referenceCount,
+        }),
+        $t("workbench.generate.generateConfirmCostHint"),
+      ].join("\n"),
+      confirmBtn: $t("workbench.generate.confirmGenerate"),
+      cancelBtn: $t("workbench.generate.cancelGenerate"),
+      closeBtn: false,
+      closeOnEscKeydown: false,
+      closeOnOverlayClick: false,
+      onConfirm: () => finish(true),
+      onCancel: () => finish(false),
+    });
+  });
 }
 
 const imageList = computed({
@@ -191,25 +252,58 @@ const activeTrackGenTextLoading = computed(() => {
   return trackId != null ? !!genTextLoadingMap.value[trackId] : false;
 });
 
-function isFixedDurationSeedanceModel(model?: string | null, displayName?: string | null) {
+function isSeedance2Model(model?: string | null, displayName?: string | null) {
   const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
   return value.includes("seedance") && (value.includes("seedance-2-0") || value.includes("seedance-2.0") || value.includes("seedance2.0"));
 }
 
+function isVolcengineSeedance2Model(model?: string | null, displayName?: string | null) {
+  const [vendorId] = String(model || "").split(/:(.+)/);
+  return vendorId === "volcengine" && isSeedance2Model(model, displayName);
+}
+
+function isGrokImagineVideoModel(model?: string | null, displayName?: string | null) {
+  const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
+  return value.includes("grok-imagine-video") || (value.includes("grok") && value.includes("imagine") && value.includes("video"));
+}
+
+function isGrokImagineVideo15PreviewModel(model?: string | null, displayName?: string | null) {
+  const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
+  return value.includes("grok-imagine-video-1.5-preview") || value.includes("grokimaginevideo1.5preview");
+}
+
+function getGrokVideoSupportedDurations(model?: string | null, displayName?: string | null) {
+  return isGrokImagineVideo15PreviewModel(model, displayName)
+    ? [...GROK_IMAGINE_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS]
+    : [...GROK_VIDEO_SUPPORTED_DURATIONS];
+}
+
+function resolveGrokDuration(duration?: number | string | null, model?: string | null, displayName?: string | null) {
+  const durations = getGrokVideoSupportedDurations(model, displayName);
+  const value = Number(duration);
+  if (!Number.isFinite(value) || value <= 0) return durations[0];
+  return durations.find((item) => value <= item) ?? durations[durations.length - 1];
+}
+
 function normalizeModeOptions(data: VideoModel): VideoModel {
-  if (!isFixedDurationSeedanceModel(modelParmas.value.model, data.modelName)) return data;
-  return {
-    ...data,
-    durationResolutionMap: data.durationResolutionMap?.map((item) => ({
-      ...item,
-      duration: [FIXED_SEEDANCE_VIDEO_DURATION_SECONDS],
-    })) ?? [{ duration: [FIXED_SEEDANCE_VIDEO_DURATION_SECONDS], resolution: [] }],
-  };
+  if (isGrokImagineVideoModel(modelParmas.value.model, data.modelName)) {
+    const durations = getGrokVideoSupportedDurations(modelParmas.value.model, data.modelName);
+    return {
+      ...data,
+      durationResolutionMap: data.durationResolutionMap?.map((item) => ({
+        ...item,
+        duration: durations,
+      })) ?? [{ duration: durations, resolution: [] }],
+    };
+  }
+  return data;
 }
 
 /** 将时长限制在模型支持的范围内 */
 function clampDuration(trackDuration: number): number {
-  if (isFixedDurationSeedanceModel(modelParmas.value.model, modeOptions.value.modelName)) return FIXED_SEEDANCE_VIDEO_DURATION_SECONDS;
+  if (isGrokImagineVideoModel(modelParmas.value.model, modeOptions.value.modelName)) {
+    return resolveGrokDuration(trackDuration || modelParmas.value.duration, modelParmas.value.model, modeOptions.value.modelName);
+  }
   const drMap = modeOptions.value?.durationResolutionMap;
   if (Array.isArray(drMap) && drMap.length > 0 && drMap[0].duration?.length) {
     const durations = drMap[0].duration;
@@ -413,57 +507,36 @@ onMounted(() => {
 async function generateVideo() {
   const trackId = trackList.value[activeTrackIndex.value]?.id;
   if (trackId == null || generatingMap.value[trackId]) return;
+  const uploadData = getCurrentTrackUploadData();
+  const confirmed = await confirmGenerateVideo(activeTrackIndex.value, uploadData.length);
+  if (!confirmed) return;
+
   generatingMap.value[trackId] = true;
-  const dlg = DialogPlugin.confirm({
-    header: $t("workbench.generate.generateConfirm"),
-    body: $t("workbench.generate.generateConfirmBody"),
-    onConfirm: async () => {
-      dlg.destroy();
-      try {
-        const { data } = await axios.post("/production/workbench/generateVideo", {
-          projectId: project.value?.id,
-          scriptId: episodesId.value,
-          uploadData:
-            modelParmas.value.mode === "text"
-              ? []
-              : (() => {
-                  const frameMode = ["startEndRequired", "endFrameOptional", "startFrameOptional"];
-                  const preSliced = frameMode.includes(modelParmas.value.mode)
-                    ? imageList.value.slice(0, 2)
-                    : modelParmas.value.mode === "singleImage"
-                      ? imageList.value.slice(0, 1)
-                      : imageList.value;
-                  const filtered = preSliced.filter((item) => isUsableReferenceItem(item) && item.id).map(({ id, sources }) => ({ id, sources }));
-                  if (frameMode.includes(modelParmas.value.mode)) return filtered.slice(0, 2);
-                  if (modelParmas.value.mode === "singleImage") return filtered.slice(0, 1);
-                  return filtered;
-                })(),
-          prompt: currentTrack.value.prompt,
-          model: modelParmas.value.model,
-          mode: modelParmas.value.mode,
-          resolution: modelParmas.value.resolution,
-          duration: modelParmas.value.duration,
-          audio: modelParmas.value.audio,
-          trackId,
-        });
-        window.$message.success($t("workbench.generate.generateStarted"));
-        const targetTrack = trackList.value.find((item) => item.id === trackId);
-        targetTrack?.videoList.push({
-          id: data,
-          state: "生成中",
-          src: "",
-        });
-      } catch (e) {
-        window.$message.error((e as any)?.message ?? "视频发起生成请求失败");
-      } finally {
-        generatingMap.value[trackId] = false;
-      }
-    },
-    onCancel: () => {
-      generatingMap.value[trackId] = false;
-      dlg.destroy();
-    },
-  });
+  try {
+    const { data } = await axios.post("/production/workbench/generateVideo", {
+      projectId: project.value?.id,
+      scriptId: episodesId.value,
+      uploadData,
+      prompt: currentTrack.value.prompt,
+      model: modelParmas.value.model,
+      mode: modelParmas.value.mode,
+      resolution: modelParmas.value.resolution,
+      duration: modelParmas.value.duration,
+      audio: modelParmas.value.audio,
+      trackId,
+    });
+    window.$message.success($t("workbench.generate.generateStarted"));
+    const targetTrack = trackList.value.find((item) => item.id === trackId);
+    targetTrack?.videoList.push({
+      id: data,
+      state: "生成中",
+      src: "",
+    });
+  } catch (e) {
+    window.$message.error((e as any)?.message ?? "视频发起生成请求失败");
+  } finally {
+    generatingMap.value[trackId] = false;
+  }
 }
 let pollTimer: NodeJS.Timeout | null = null;
 

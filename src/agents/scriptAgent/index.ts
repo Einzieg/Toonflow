@@ -270,10 +270,22 @@ async function consumeFullStream(
         throw chunk.error;
       }
     }
+    if (syncMsg) {
+      const newMsg = syncMsg();
+      if (newMsg !== msg) {
+        msg = newMsg;
+        text = msg.text();
+      }
+    }
     text.complete();
     msg.complete();
   } catch (err: any) {
     thinking?.complete();
+    if (err?.name === "AbortError" || err?.code === "ABORT_ERR") {
+      text.complete();
+      msg.stop();
+      throw err;
+    }
     const errMsg = err?.message ?? String(err);
     text.append(errMsg);
     text.error();

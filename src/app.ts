@@ -10,14 +10,46 @@ import cors from "cors";
 import buildRoute from "@/core";
 import path from "path";
 import fs from "fs";
+import fsp from "node:fs/promises";
 import u from "@/utils";
 import jwt from "jsonwebtoken";
 import socketInit from "@/socket/index";
 import { isEletron } from "@/utils/getPath";
 import sharp from "sharp";
+import crypto from "node:crypto";
 
 const app = express();
 const server = http.createServer(app);
+const OSS_PREVIEW_CONCURRENCY = Math.max(1, Number.parseInt(process.env.OSS_PREVIEW_CONCURRENCY || "4", 10) || 4);
+const SHARP_CONCURRENCY = Math.max(1, Number.parseInt(process.env.SHARP_CONCURRENCY || "4", 10) || 4);
+let activePreviewTransforms = 0;
+const previewTransformQueue: Array<() => void> = [];
+
+sharp.concurrency(SHARP_CONCURRENCY);
+
+async function withPreviewTransformSlot<T>(fn: () => Promise<T>) {
+  if (activePreviewTransforms >= OSS_PREVIEW_CONCURRENCY) {
+    await new Promise<void>((resolve) => previewTransformQueue.push(resolve));
+  }
+
+  activePreviewTransforms += 1;
+  try {
+    return await fn();
+  } finally {
+    activePreviewTransforms -= 1;
+    previewTransformQueue.shift()?.();
+  }
+}
+
+function previewContentType(format: string) {
+  if (format === "jpeg") return "image/jpeg";
+  if (format === "png") return "image/png";
+  return "image/webp";
+}
+
+function previewCacheExtension(format: string) {
+  return format === "jpeg" ? "jpg" : format;
+}
 
 async function checkPermissions() {
   if (!isEletron()) return true;
@@ -70,6 +102,9 @@ export default async function startServe(randomPort: Boolean = false) {
     try {
       const encodedPath = String(req.params[0] || "");
       const relativePath = decodeURIComponent(encodedPath);
+      if (relativePath.startsWith(".preview-cache/") || relativePath.includes("/.preview-cache/")) {
+        return res.status(404).end();
+      }
       if (!/\.(jpe?g|png|webp|bmp|gif)$/i.test(relativePath)) {
         return res.status(404).end();
       }
@@ -82,30 +117,52 @@ export default async function startServe(randomPort: Boolean = false) {
       const width = Math.min(4096, Math.max(0, Number.parseInt(String(req.query.w || ""), 10) || 0));
       const height = Math.min(4096, Math.max(0, Number.parseInt(String(req.query.h || ""), 10) || 0));
       const format = ["webp", "jpeg", "png"].includes(String(req.query.format || "")) ? String(req.query.format) : "webp";
-      const transformer = sharp(absolutePath, { failOn: "none" }).rotate();
+      const stat = await fsp.stat(absolutePath);
+      const cacheKey = crypto
+        .createHash("sha1")
+        .update(JSON.stringify({ relativePath, size: stat.size, mtimeMs: stat.mtimeMs, width, height, format }))
+        .digest("hex");
+      const cacheDir = path.join(ossDir, ".preview-cache", cacheKey.slice(0, 2));
+      const cachePath = path.join(cacheDir, `${cacheKey}.${previewCacheExtension(format)}`);
+      const sendCachedPreview = () => {
+        res.type(previewContentType(format));
+        res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+        return res.sendFile(cachePath, { dotfiles: "allow" });
+      };
 
-      if (width > 0 || height > 0) {
-        transformer.resize({
-          width: width || undefined,
-          height: height || undefined,
-          fit: "inside",
-          withoutEnlargement: true,
-        });
+      if (fs.existsSync(cachePath)) {
+        return sendCachedPreview();
       }
 
-      if (format === "jpeg") {
-        transformer.jpeg({ quality: 82, mozjpeg: true });
-        res.type("image/jpeg");
-      } else if (format === "png") {
-        transformer.png({ compressionLevel: 9 });
-        res.type("image/png");
-      } else {
-        transformer.webp({ quality: 82, effort: 4 });
-        res.type("image/webp");
-      }
+      await withPreviewTransformSlot(async () => {
+        if (fs.existsSync(cachePath)) return;
+        await fsp.mkdir(cacheDir, { recursive: true });
 
-      res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
-      res.end(await transformer.toBuffer());
+        const tmpPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+        const transformer = sharp(absolutePath, { failOn: "none" }).rotate();
+
+        if (width > 0 || height > 0) {
+          transformer.resize({
+            width: width || undefined,
+            height: height || undefined,
+            fit: "inside",
+            withoutEnlargement: true,
+          });
+        }
+
+        if (format === "jpeg") {
+          transformer.jpeg({ quality: 82, mozjpeg: true });
+        } else if (format === "png") {
+          transformer.png({ compressionLevel: 9 });
+        } else {
+          transformer.webp({ quality: 82, effort: 4 });
+        }
+
+        await transformer.toFile(tmpPath);
+        await fsp.rename(tmpPath, cachePath);
+      });
+
+      return sendCachedPreview();
     } catch (error: any) {
       if (error?.message?.includes("不在 OSS 根目录内")) {
         return res.status(403).end();

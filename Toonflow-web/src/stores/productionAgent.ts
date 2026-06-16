@@ -69,7 +69,7 @@ function makeProductionAgentStore(projectId: string) {
 
     const episodesId = ref<number>();
 
-    const { connected, messages, chat, stopGenerate, socket, status, reconnect, connect, disconnect } = useChat({
+    const { connected, messages, chat, stopGenerate, socket, status, currentMessageId, reconnect, connect, disconnect } = useChat({
       url: `${settingStore().baseUrl}/socket/productionAgent`,
       auth: () => ({
         isolationKey: `${projectId}:productionAgent:${episodesId.value}`,
@@ -239,6 +239,13 @@ function makeProductionAgentStore(projectId: string) {
             callback?.({
               success: true,
               message: `已写入分镜表 ${data?.rowCount ?? 0} 行`,
+            });
+          });
+          s.on("setStoryboardPanel", async (data, callback) => {
+            await getFlowData();
+            callback?.({
+              success: true,
+              message: `已写入分镜面板 ${data?.insertedCount ?? 0} 条`,
             });
           });
         }
@@ -529,6 +536,8 @@ function makeProductionAgentStore(projectId: string) {
       });
       messages.value = [];
       messages.value = [...defMsg, ...data];
+      currentMessageId.value = null;
+      status.value = "idle";
       loadingHistory.value = false;
     }
 

@@ -39,6 +39,37 @@ export default (nsp: Namespace) => {
       projectId: socket.handshake.auth.projectId,
     });
     let abortController: AbortController | null = null;
+    type AgentMessage = ReturnType<ResTool["newMessage"]>;
+    type ActiveRun = {
+      controller: AbortController;
+      rootMsg: AgentMessage;
+      ctx: agent.AgentContext;
+    };
+    let activeRun: ActiveRun | null = null;
+
+    const getRunMessages = (run: ActiveRun) => {
+      const messages: AgentMessage[] = [run.rootMsg];
+      if (run.ctx.msg.id !== run.rootMsg.id) messages.push(run.ctx.msg);
+      return messages;
+    };
+
+    const settleRunMessages = (run: ActiveRun, status: "complete" | "stop" | "error", errorMsg?: string) => {
+      for (const message of getRunMessages(run)) {
+        if (status === "complete") message.complete();
+        if (status === "stop") message.stop();
+        if (status === "error") message.error(errorMsg);
+      }
+    };
+
+    const abortActiveRun = () => {
+      if (!activeRun) return;
+      activeRun.controller.abort();
+      settleRunMessages(activeRun, "stop");
+      abortController = null;
+      activeRun = null;
+    };
+
+    const isAbortError = (err: any, signal?: AbortSignal) => signal?.aborted || err?.name === "AbortError" || err?.code === "ABORT_ERR";
 
     const thinkConfig: agent.AgentContext["thinkConfig"] = {
       think: false,
@@ -47,7 +78,7 @@ export default (nsp: Namespace) => {
 
     socket.on("chat", async (data: { content: string }) => {
       const { content } = data;
-      abortController?.abort();
+      abortActiveRun();
       abortController = new AbortController();
       const currentController = abortController;
 
@@ -62,16 +93,29 @@ export default (nsp: Namespace) => {
         msg,
         thinkConfig,
       };
+      const currentRun: ActiveRun = { controller: currentController, rootMsg: msg, ctx };
+      activeRun = currentRun;
+      let runSettled = false;
 
       try {
         await agent.runDecisionAI(ctx);
       } catch (err: any) {
-        if (err.name !== "AbortError" && !currentController.signal.aborted) {
-          console.error("[scriptAgent] chat error:", u.error(err).message);
+        if (isAbortError(err, currentController.signal)) {
+          settleRunMessages(currentRun, "stop");
+          runSettled = true;
+        } else {
+          const errorMsg = u.error(err).message;
+          console.error("[scriptAgent] chat error:", errorMsg);
+          settleRunMessages(currentRun, "error", errorMsg);
+          runSettled = true;
         }
       } finally {
         if (abortController === currentController) {
           abortController = null;
+        }
+        if (activeRun?.controller === currentController) {
+          if (!runSettled) settleRunMessages(currentRun, currentController.signal.aborted ? "stop" : "complete");
+          activeRun = null;
         }
       }
     });
@@ -83,11 +127,12 @@ export default (nsp: Namespace) => {
     });
 
     socket.on("stop", () => {
-      abortController?.abort();
-      abortController = null;
+      abortActiveRun();
     });
-  });
-  nsp.on("disconnect", (socket: Socket) => {
-    console.log("[scriptAgent] 已断开连接:", socket.id);
+
+    socket.on("disconnect", () => {
+      abortActiveRun();
+      console.log("[scriptAgent] 已断开连接:", socket.id);
+    });
   });
 };

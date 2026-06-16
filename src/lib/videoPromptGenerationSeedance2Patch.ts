@@ -19,7 +19,7 @@ export const seedance2PromptSection = `### 三、Seedance 2.0
 
 #### 核心原则
 - **保持当前系统输出结构**：继续使用 \`画面风格和类型\`、\`参考定义\`、\`生成一个由以下 N 个分镜组成的视频\`、\`分镜N {N}s:\`，不要改成单行序号格式
-- **固定总时长 15 秒**：Seedance 2.0/2.0-Fast 的视频生成接口固定输出 15 秒；提示词中的所有 \`分镜N {N}s\` 时长相加必须严格等于 15s
+- **按轨道实际时长生成**：Seedance 2.0/2.0-Fast 使用当前轨道累计 duration 作为视频时长，不再固定补足到 15 秒；提示词中的所有 \`分镜N {N}s\` 时长相加必须严格等于 XML duration 总和，且不超过 15s
 - **真人参考使用官方虚拟人像**：当角色资产配置了火山官方/授权素材 \`asset://...\` 时，该素材会作为接口参考图提交；提示词仍只按系统分配的 \`@图N\`/角色名描述，不输出 \`asset://\` 或真实素材 ID
 - **衍生角色继承虚拟人像**：角色的服装、状态、表情等衍生资产只作为文字造型约束和工作流预览；进入 Seedance 2.x 视频生成时仍使用父角色的官方虚拟人像参考，不把衍生角色图片当真人参考图上传
 - **分镜图只作构图辅助**：当分镜关联了官方虚拟人像角色时，视频接口优先接收角色 \`asset://\` 参考，分镜成图不再作为人物参考图上传；提示词需要用分镜 \`videoDesc\` 补足构图、动作和镜头信息
@@ -51,7 +51,7 @@ export const seedance2PromptSection = `### 三、Seedance 2.0
 场景:
 分镜过渡: 无
 
-分镜1 15s: 时间：{...}，场景：{...}，镜头：{景别}，{角度}，{运镜}。主体关系：{谁在前景/中景/后景，谁为当前焦点}。动作节奏上，先{起始状态与动作}，随后{主要动作推进、运镜变化和神态变化}，最后{收束动作或情绪落点}。补充{视线、呼吸、手部、衣摆、头发、道具等二级动作}。{台词类型、台词内容、口型状态与音色描述（如有）}。{仅保留对动作或情绪有帮助的必要环境/光影/音效信息}。
+分镜1 {A}s: 时间：{...}，场景：{...}，镜头：{景别}，{角度}，{运镜}。主体关系：{谁在前景/中景/后景，谁为当前焦点}。动作节奏上，先{起始状态与动作}，随后{主要动作推进、运镜变化和神态变化}，最后{收束动作或情绪落点}。补充{视线、呼吸、手部、衣摆、头发、道具等二级动作}。{台词类型、台词内容、口型状态与音色描述（如有）}。{仅保留对动作或情绪有帮助的必要环境/光影/音效信息}。
 \`\`\`
 
 **多分镜模板：**
@@ -66,7 +66,7 @@ export const seedance2PromptSection = `### 三、Seedance 2.0
 生成一个由以下 {N} 个分镜组成的视频:
 
 场景:
-分镜过渡: {整体过渡方式，说明焦点、景别或情绪如何在分镜间连续变化；所有分镜时长总和=15s}
+分镜过渡: {整体过渡方式，说明焦点、景别或情绪如何在分镜间连续变化；所有分镜时长总和={总时长}s}
 
 分镜1 {A}s: ...
 分镜2 {B}s: ...
@@ -114,7 +114,7 @@ export const seedance2PromptSection = `### 三、Seedance 2.0
 7. **台词不可缺失**：有台词必须完整输出台词内容和音色；普通对白、内心OS、画外音要用正确格式
 8. **无台词时明确静默**：必须标注嘴部不动或无开口状态，避免误生成口型
 9. **不编造未给定内容**：不新增角色、不新增道具、不新增场景，不跨分镜串内容
-10. **时长单位与总时长**：直接使用秒，格式为 \`{N}s\`，单分镜最低 1s；所有分镜时长相加必须严格等于 15s
+10. **时长单位与总时长**：直接使用秒，格式为 \`{N}s\`，单分镜最低 1s；所有分镜时长相加必须严格等于 XML duration 总和，且不超过 15s；不要把不足 15s 的轨道强行延展到 15s
 11. **当关联资产顺序与类型混排时**，仍要依据资产真实类型组织参考定义和正文，不要按编号臆断角色/场景类型
 12. **虚拟人像只影响接口参考图**：即使角色参考来自火山官方 \`asset://\` 虚拟人像，输出文本也按普通角色参考处理，只写 \`@图N: 角色名，简短辨识描述\` 和分镜动作
 13. **衍生资产和分镜不替代虚拟人像**：角色衍生图、人物分镜图不得替代官方虚拟人像作为 Seedance 2.x 真人参考；相关服装/动作/构图只能写入提示词正文
@@ -127,8 +127,8 @@ export const seedance2PromptSection = `### 三、Seedance 2.0
 资产信息[A001, role, 沈辞], [A002, role, 苏锦], [A003, scene, 城楼]
 \`\`\`
 \`\`\`xml
-<storyboardItem videoDesc='（沈辞独立城楼远眺苍茫大地、城楼、沈辞/城楼、4s、全景、静止、负手而立衣袂随风飘扬、坚定决绝、黄昏冷调侧逆光、无台词、风声衣袂声、A001/A003）' prompt='全景，平视略仰，城楼之上，沈辞负手而立，衣袂飘扬，黄昏冷调侧逆光...' track='main' duration='7' associateAssetsIds="[&quot;A001&quot;,&quot;A003&quot;]" shouldGenerateImage="true"></storyboardItem>
-<storyboardItem videoDesc='（苏锦登上城楼走向沈辞、城楼、苏锦/沈辞/城楼、4s、中景、跟踪、苏锦拾级而上走向沈辞、担忧、黄昏余晖渐暗、苏锦说：你又一个人在这里、脚步声风声、A001/A002/A003）' prompt='中景，跟踪，苏锦拾级而上走向城楼上的沈辞...' track='main' duration='8' associateAssetsIds="[&quot;A001&quot;,&quot;A002&quot;,&quot;A003&quot;]" shouldGenerateImage="true"></storyboardItem>
+<storyboardItem videoDesc='（沈辞独立城楼远眺苍茫大地、城楼、沈辞/城楼、4s、全景、静止、负手而立衣袂随风飘扬、坚定决绝、黄昏冷调侧逆光、无台词、风声衣袂声、A001/A003）' prompt='全景，平视略仰，城楼之上，沈辞负手而立，衣袂飘扬，黄昏冷调侧逆光...' track='main' duration='4' associateAssetsIds="[&quot;A001&quot;,&quot;A003&quot;]" shouldGenerateImage="true"></storyboardItem>
+<storyboardItem videoDesc='（苏锦登上城楼走向沈辞、城楼、苏锦/沈辞/城楼、4s、中景、跟踪、苏锦拾级而上走向沈辞、担忧、黄昏余晖渐暗、苏锦说：你又一个人在这里、脚步声风声、A001/A002/A003）' prompt='中景，跟踪，苏锦拾级而上走向城楼上的沈辞...' track='main' duration='4' associateAssetsIds="[&quot;A001&quot;,&quot;A002&quot;,&quot;A003&quot;]" shouldGenerateImage="true"></storyboardItem>
 \`\`\`
 
 输出：
@@ -145,14 +145,57 @@ export const seedance2PromptSection = `### 三、Seedance 2.0
 生成一个由以下 2 个分镜组成的视频:
 
 场景:
-分镜过渡: 从城楼上的独处凝望平滑过渡到人物接近后的对话，景别由全景转向中景，焦点从沈辞单人转为两人关系；整体时长严格控制为15秒。
+分镜过渡: 从城楼上的独处凝望平滑过渡到人物接近后的对话，景别由全景转向中景，焦点从沈辞单人转为两人关系；整体时长严格控制为8秒。
 
-分镜1 7s: 时间：黄昏，场景：城楼，镜头：全景，平视略仰，起幅静止后轻微缓推。沈辞位于画面中前景偏右，为当前焦点。动作节奏上，先负手立定望向远处，随后视线轻微移动、下颌微收，衣袂与发梢被风持续带起，最后呼吸放缓但仍保持凝视。补充衣摆回摆、肩部细微起伏、风声层次和目光停顿。无台词，嘴部保持闭合。风声与衣袂摩擦声持续，冷调侧逆光压住人物情绪。
-分镜2 8s: 时间：黄昏，场景：城楼，镜头：中景，平视，跟踪拍摄。苏锦从后侧台阶进入并逐步成为前景焦点，沈辞保持在前方中景。动作节奏上，先苏锦加快两步拾级而上，随后放慢脚步看向沈辞，眉眼收紧、手指轻收，最后开口说道：「你又一个人在这里。」音色：女声，青年音色，音调中等偏高，音色质感明亮清脆，声音清亮柔和，发音方式干净，气息充沛平稳，语速适中，带温婉真诚感，口型同步说话。补充脚步顿挫、衣摆轻晃、靠近前的停顿和视线停留。脚步声、风声与衣料轻响自然衔接。
+分镜1 4s: 时间：黄昏，场景：城楼，镜头：全景，平视略仰，起幅静止后轻微缓推。沈辞位于画面中前景偏右，为当前焦点。动作节奏上，先负手立定望向远处，随后视线轻微移动、下颌微收，衣袂与发梢被风持续带起，最后呼吸放缓但仍保持凝视。补充衣摆回摆、肩部细微起伏、风声层次和目光停顿。无台词，嘴部保持闭合。风声与衣袂摩擦声持续，冷调侧逆光压住人物情绪。
+分镜2 4s: 时间：黄昏，场景：城楼，镜头：中景，平视，跟踪拍摄。苏锦从后侧台阶进入并逐步成为前景焦点，沈辞保持在前方中景。动作节奏上，先苏锦加快两步拾级而上，随后放慢脚步看向沈辞，眉眼收紧、手指轻收，最后开口说道：「你又一个人在这里。」音色：女声，青年音色，音调中等偏高，音色质感明亮清脆，声音清亮柔和，发音方式干净，气息充沛平稳，语速适中，带温婉真诚感，口型同步说话。补充脚步顿挫、衣摆轻晃、靠近前的停顿和视线停留。脚步声、风声与衣料轻响自然衔接。
 \`\`\`
 
 ---
 
+`;
+
+export const grokImagineVideoPromptSection = `### Grok Imagine Video
+
+#### 核心原则
+- **只生成单段视频提示词**：Grok Imagine Video 不是 Seedance 2.0 的多分镜模板，不输出“生成一个由以下 N 个分镜组成的视频”、不输出“分镜1 7s”这类分镜列表。
+- **只支持 6 秒或 10 秒**：最终提示词必须明确目标为 6-second 或 10-second clip；禁止出现 12s、15s、16s、20s 或其他时长。
+- **英文优先**：最终输出用自然英文视频提示词，中文角色名、台词内容可以保留原文；不要输出中文模板标题、分析过程或模型说明。
+- **参考图使用方式**：Grok 支持在提示词中用 @图N 引用已上传图片；必须按当前输入顺序使用 @图1、@图2、@图3...，让角色、场景、道具和分镜构图分别绑定到对应参考图。
+- **引用必须可追踪**：可以输出英文 "Reference mapping:" 行声明 @图N 对应的角色/场景/道具/分镜图；后续动作描述中继续使用这些 @图N，避免只写“provided reference images”导致模型混淆。
+- **单段连续镜头**：将输入的一个或多个 storyboardItem 压缩成一个连续 6/10 秒镜头，可用 0-2s / 2-4s / 4-6s 或 0-3s / 3-7s / 7-10s 的 time beats，但不要拆成多个独立镜头。
+- **动态优先**：每个 time beat 都要写动作推进、镜头运动、表情/姿态变化和情绪落点；不要只复述静态 prompt。
+- **减少无效配置词**：避免 4K、best quality、ultra detailed 等堆砌；优先写主体、动作、镜头、光影、节奏、约束。
+- **长度上限**：最终提示词必须控制在 3200 个英文字符以内；压缩 Reference mapping、Action timeline、Camera、Performance、Constraints，禁止复制长段 storyboard 原文。
+- **视频稳定性约束**：必须加入 identity consistency、stable anatomy、natural motion、no extra characters、no subtitles、no text overlay、no logo/watermark 等负向约束。
+
+#### 输出模板
+
+\`\`\`
+A {6/10}-second cinematic video clip. Use the provided reference image(s) to preserve exact character identity, outfit, scene design, and visual style.
+Reference mapping: @图1 = {role/scene/prop/storyboard name and purpose}, @图2 = {...}.
+Scene and mood: {one concise sentence based on videoDesc and art style}.
+Action timeline: {0-Xs beat using @图N references}, {X-Ys beat using @图N references}, {Y-{6/10}s beat using @图N references}.
+Camera and motion: {shot size, angle, camera path, focus change, natural secondary motion}.
+Performance: {facial expression, gaze, posture, mouth state; keep original dialogue text only if present}.
+Lighting and atmosphere: {time of day, color temperature, light direction, environmental motion/sound cues as visual rhythm}.
+Constraints: identity consistency, stable anatomy, natural motion, coherent hands and faces, no extra characters, no scene drift, no subtitles, no text overlay, no logo, no watermark.
+\`\`\`
+
+#### 时长组织
+- 6 秒：优先分成 0-2s、2-4s、4-6s 三段；如果动作很简单，可写成起幅 → 推进 → 收束。
+- 10 秒：优先分成 0-3s、3-7s、7-10s 三段；多分镜输入时按原始顺序压缩到这三个节奏段。
+- 若输入分镜原始累计时长不是 6 或 10 秒，以系统提供的“Grok 目标时长”为准，按比例压缩或延展动作，不新增剧情结果。
+
+#### 生成约束
+1. 只输出最终英文提示词正文。
+2. 第一行必须以 \`A 6-second cinematic video clip.\` 或 \`A 10-second cinematic video clip.\` 开始。
+3. 必须使用 @图N 绑定参考图片；禁止使用未出现在输入中的 @图N，禁止把多个角色/场景都笼统写成 provided references。
+4. 可以输出英文 \`Reference mapping:\`，但不要输出中文“参考定义/图片定义”、Markdown 标题、XML、解释说明。
+5. 保留 videoDesc 中已存在的角色、场景、道具、台词和情绪，不新增未出现资产。
+6. 有普通对白时，只描述 visible lip movement and original dialogue text；内心OS/VO 必须写 silent lips。
+7. 无台词时写 no dialogue, mouth remains closed，避免误生成口型。
+8. 总长度不超过 3200 个英文字符。
 `;
 
 export function patchVideoPromptGenerationSeedance2Section(prompt: string): string;

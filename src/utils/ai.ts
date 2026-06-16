@@ -176,6 +176,13 @@ function getEmptyOutputFallbackModel(modelName: `${string}:${string}`): `${strin
   return null;
 }
 
+function getImageFallbackModel(modelName: `${string}:${string}`): `${string}:${string}` | null {
+  if (modelName === "grsai:gpt-image-2" || modelName === "grsai:gpt-image-2-vip") {
+    return "cliproxyapi:gpt-image-2";
+  }
+  return null;
+}
+
 class AiText {
   private AiType: AiType | `${string}:${string}`;
   private think?: boolean;
@@ -311,11 +318,33 @@ class AiImage {
   async run(input: ImageConfig, taskRecord?: TaskRecord) {
     const modelName = await resolveModelName(this.key);
     const exec = async (mn: `${string}:${string}`) => {
-      const fn = await getVendorTemplateFn("imageRequest", mn);
-      await referenceList2imageBase642(mn.split(/:(.+)/)[0], input);
-      this.result = await fn(input);
-      if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
-      return this;
+      const runWithModel = async (targetModel: `${string}:${string}`) => {
+        const fn = await getVendorTemplateFn("imageRequest", targetModel);
+        const attemptInput = {
+          ...input,
+          referenceList: input.referenceList?.map((item) => ({ ...item })),
+        };
+        await referenceList2imageBase642(targetModel.split(/:(.+)/)[0], attemptInput);
+        this.result = await fn(attemptInput);
+        if (this.result.startsWith("http")) this.result = await urlToBase64(this.result);
+        return this;
+      };
+
+      try {
+        return await runWithModel(mn);
+      } catch (error) {
+        const fallbackModel = getImageFallbackModel(mn);
+        if (!fallbackModel) throw error;
+
+        console.warn(`[AiImage] ${mn} failed, retrying with ${fallbackModel}: ${u.error(error).message}`);
+        try {
+          return await runWithModel(fallbackModel);
+        } catch (fallbackError) {
+          throw new Error(
+            `图片生成失败：主模型 ${mn} 报错：${u.error(error).message}；兜底模型 ${fallbackModel} 报错：${u.error(fallbackError).message}`,
+          );
+        }
+      }
     };
     if (taskRecord) {
       return withTaskRecord(this.key, taskRecord.taskClass, taskRecord.describe, taskRecord.relatedObjects, taskRecord.projectId, exec);

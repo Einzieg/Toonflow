@@ -1,5 +1,6 @@
 export const MAX_TRACK_DURATION_SECONDS = 15;
-export const FIXED_SEEDANCE_VIDEO_DURATION_SECONDS = 15;
+export const GROK_VIDEO_SUPPORTED_DURATIONS = [6, 10] as const;
+export const GROK_IMAGINE_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS = [6, 10, 15] as const;
 
 type Nullable<T> = T | null | undefined;
 
@@ -36,28 +37,54 @@ export function normalizeStoryboardDuration(rawDuration: Nullable<number | strin
 
 export function normalizeStoryboardTrack(track: Nullable<string>): string {
   const normalized = String(track ?? "").trim();
-  return normalized || "__AUTO__";
+  // Numeric labels are generated track numbers, not hard grouping keys.
+  // Treat them as auto so re-sync can merge adjacent storyboards by duration.
+  if (!normalized || /^\d+$/.test(normalized)) return "__AUTO__";
+  return normalized;
 }
 
-export function isFixedDurationSeedanceVideoModel(model?: Nullable<string>, displayName?: Nullable<string>): boolean {
+export function isSeedance2VideoModel(model?: Nullable<string>, displayName?: Nullable<string>): boolean {
   const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
   return value.includes("seedance") && (value.includes("seedance-2-0") || value.includes("seedance-2.0") || value.includes("seedance2.0"));
 }
 
+export function isGrokImagineVideoModel(model?: Nullable<string>, displayName?: Nullable<string>): boolean {
+  const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
+  return value.includes("grok-imagine-video") || (value.includes("grok") && value.includes("imagine") && value.includes("video"));
+}
+
+export function isGrokImagineVideo15PreviewModel(model?: Nullable<string>, displayName?: Nullable<string>): boolean {
+  const value = `${model ?? ""} ${displayName ?? ""}`.toLowerCase().replace(/\s+/g, "");
+  return value.includes("grok-imagine-video-1.5-preview") || value.includes("grokimaginevideo1.5preview");
+}
+
+export function getGrokVideoSupportedDurations(model?: Nullable<string>, displayName?: Nullable<string>): number[] {
+  return isGrokImagineVideo15PreviewModel(model, displayName) ? [...GROK_IMAGINE_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS] : [...GROK_VIDEO_SUPPORTED_DURATIONS];
+}
+
+export function resolveGrokVideoDuration(duration: Nullable<number | string>, model?: Nullable<string>, displayName?: Nullable<string>): number {
+  const supportedDurations = getGrokVideoSupportedDurations(model, displayName);
+  const value = sanitizeDurationValue(duration, supportedDurations[0]);
+  return supportedDurations.find((item) => value <= item) ?? supportedDurations[supportedDurations.length - 1];
+}
+
 export function resolveVideoGenerationDuration(model: Nullable<string>, duration: Nullable<number | string>, displayName?: Nullable<string>): number {
-  if (isFixedDurationSeedanceVideoModel(model, displayName)) return FIXED_SEEDANCE_VIDEO_DURATION_SECONDS;
+  if (isGrokImagineVideoModel(model, displayName)) return resolveGrokVideoDuration(duration, model, displayName);
   return normalizeStoryboardDuration(duration);
 }
 
 export function normalizeVideoModelDurationMap<T extends { name?: string; modelName?: string; durationResolutionMap?: { duration: number[]; resolution: string[] }[] }>(model: T): T {
-  if (!isFixedDurationSeedanceVideoModel(model.modelName, model.name) || !Array.isArray(model.durationResolutionMap)) return model;
-  return {
-    ...model,
-    durationResolutionMap: model.durationResolutionMap.map((item) => ({
-      ...item,
-      duration: [FIXED_SEEDANCE_VIDEO_DURATION_SECONDS],
-    })),
-  };
+  if (!Array.isArray(model.durationResolutionMap)) return model;
+  if (isGrokImagineVideoModel(model.modelName, model.name)) {
+    return {
+      ...model,
+      durationResolutionMap: model.durationResolutionMap.map((item) => ({
+        ...item,
+        duration: getGrokVideoSupportedDurations(model.modelName, model.name),
+      })),
+    };
+  }
+  return model;
 }
 
 export function expandStoryboardItemsForDuration<T extends StoryboardTrackItem>(items: T[], maxDuration = MAX_TRACK_DURATION_SECONDS): Array<PlannedStoryboardTrackItem<T>> {
@@ -82,6 +109,7 @@ export function planStoryboardTrackSegments<T extends StoryboardTrackItem>(items
 
   items.forEach((item) => {
     const duration = normalizeStoryboardDuration(item.duration);
+    const segmentDuration = Math.min(duration, maxDuration);
     const baseTrack = normalizeStoryboardTrack(item.track);
     const plannedItem: PlannedStoryboardTrackItem<T> = {
       ...item,
@@ -99,7 +127,7 @@ export function planStoryboardTrackSegments<T extends StoryboardTrackItem>(items
     }
 
     currentSegment.items.push(plannedItem);
-    currentSegment.duration = Number((currentSegment.duration + duration).toFixed(3));
+    currentSegment.duration = Number((currentSegment.duration + segmentDuration).toFixed(3));
   });
 
   return segments;

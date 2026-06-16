@@ -48,6 +48,38 @@ const TOOL_STYLE_SUMMARY: Record<string, string> = {
   "2D_mature_urban_romance": "成熟都市言情道具风格，强调材质细节和叙事属性。",
 };
 
+const STORYBOARD_IMAGE_STYLE_SUMMARY: Record<string, string> = {
+  realpeople_urban_modern: "真人都市写实摄影，影视级纪实质感，真实皮肤、服装、空间材质与自然镜头光影。",
+  realpeople_ancient_chinese: "真人古风写实摄影，东方古装影视质感，真实服化道、古建材质与自然电影光影。",
+  "3D_anime_render": "3D 动画渲染，赛璐珞质感，电影级打光，高细节材质，清晰轮廓线，明快卡通渲染。",
+  "3D_chinese_traditional": "国风 3D 高精度建模，东方电影光影，PBR 材质，古典纹样与空间层次清晰。",
+  "3D_clay_stopmotion": "定格黏土动画质感，手工材质、微缩布景与可触摸的黏土肌理清晰。",
+  "2D_90s_japanese_anime": "90 年代日式 2D 手绘动画，赛璐璐平涂，胶片颗粒与手绘背景质感。",
+  "2D_chinese_guofeng": "国风二次元新国潮，2D 线稿与赛璐璐平涂，东方色彩和构图韵味明确。",
+  "2D_flat_design": "2D 扁平矢量设计，几何造型、纯色色块、清晰轮廓与现代图形化构图。",
+  "2D_mature_urban_romance": "成熟都市言情二次元插画，电影感光影、细腻人物气质与都市情绪氛围。",
+};
+
+const LEGACY_STORYBOARD_3D_STYLE =
+  "3D动画渲染，赛璐珞质感，电影级打光，高细节材质，清晰轮廓线，明快卡通渲染，现代都市短剧风格。";
+
+const ASSET_STYLE_GUARD: Record<string, string> = {
+  realpeople_urban_modern:
+    "风格硬约束：必须是真人实拍摄影/影视级纪实质感。严禁 3D、CGI、游戏引擎、动画、卡通、二次元、黏土、玩偶、塑料模型、虚拟人偶或建模渲染感。",
+  realpeople_ancient_chinese:
+    "风格硬约束：必须是真人古风实拍摄影/东方电影写实质感。严禁 3D、CGI、游戏引擎、动画、卡通、二次元、黏土、玩偶、塑料模型、虚拟人偶或建模渲染感。",
+  "3D_anime_render": "风格硬约束：必须保持 3D 动画渲染与赛璐珞质感，不要改成真人摄影、平面插画或黏土定格。",
+  "3D_chinese_traditional": "风格硬约束：必须保持国风 3D 高精度建模、PBR 材质与东方电影光影，不要改成真人摄影、平面插画或黏土定格。",
+  "3D_clay_stopmotion": "风格硬约束：必须保持定格黏土动画质感、手工材质与可触摸的黏土肌理，不要改成真人摄影、普通 3D CG 或二次元插画。",
+  "2D_90s_japanese_anime": "风格硬约束：必须是 90 年代日式 2D 手绘动画/赛璐璐平涂质感。严禁 3D、CGI、游戏引擎、真人摄影、黏土、玩偶或塑料模型感。",
+  "2D_chinese_guofeng": "风格硬约束：必须是国风二次元新国潮、2D 线稿与赛璐璐平涂质感。严禁 3D、CGI、游戏引擎、真人摄影、黏土、玩偶或塑料模型感。",
+  "2D_flat_design": "风格硬约束：必须是 2D 扁平矢量设计、几何造型、纯色色块。严禁 3D、CGI、真实摄影、景深、体积光、写实材质、渐变阴影或建模感。",
+  "2D_mature_urban_romance": "风格硬约束：必须是成熟都市言情二次元插画/2D 动画质感。严禁 3D、CGI、游戏引擎、真人摄影、黏土、玩偶或塑料模型感。",
+};
+
+const DEFAULT_STYLE_GUARD =
+  "风格硬约束：必须严格遵循项目当前选择的画风，不得自动改成 3D、CGI、游戏引擎、卡通、真人摄影或其他未选择风格。";
+
 const TEMPLATE_FRAGMENT_KEYWORDS = [
   "女性角色四视图设定图",
   "男性角色四视图设定图",
@@ -289,6 +321,30 @@ function isNonHumanRole(text: string) {
   return NON_HUMAN_KEYWORDS.some((keyword) => text.includes(keyword));
 }
 
+export function buildAssetStyleGuard(artStyle?: string | null) {
+  return ASSET_STYLE_GUARD[artStyle || ""] || DEFAULT_STYLE_GUARD;
+}
+
+export function buildStoryboardImageStylePrompt(artStyle?: string | null) {
+  const styleSummary = STORYBOARD_IMAGE_STYLE_SUMMARY[artStyle || ""] || "严格遵循项目当前选择的分镜图画风。";
+  return `${styleSummary}\n${buildAssetStyleGuard(artStyle)}`;
+}
+
+export function buildStoryboardImagePrompt(prompt?: string | null, artStyle?: string | null) {
+  const normalizedPrompt = normalizeText(prompt);
+  const styleFragments = [
+    ...Object.values(STORYBOARD_IMAGE_STYLE_SUMMARY),
+    ...Object.values(ASSET_STYLE_GUARD),
+    LEGACY_STORYBOARD_3D_STYLE,
+    DEFAULT_STYLE_GUARD,
+  ];
+  const basePrompt = styleFragments
+    .reduce((text, fragment) => text.replaceAll(fragment, ""), normalizedPrompt)
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return [buildStoryboardImageStylePrompt(artStyle), basePrompt].filter(Boolean).join("\n");
+}
+
 export function buildRoleAssetPrompt(input: BuildRoleAssetPromptInput) {
   const name = normalizeText(input.name);
   const describe = normalizeText(input.describe);
@@ -296,9 +352,11 @@ export function buildRoleAssetPrompt(input: BuildRoleAssetPromptInput) {
   const nonHumanRole = isNonHumanRole(roleText);
   const anchors = extractPromptAnchors(input.prompt, { nonHumanRole });
   const styleSummary = ROLE_STYLE_SUMMARY[input.artStyle || ""] || "遵循项目既定画风与材质风格，保持角色识别清晰。";
+  const styleGuard = buildAssetStyleGuard(input.artStyle);
 
   const lines = [
     styleSummary,
+    styleGuard,
     input.derivative
       ? "角色衍生设定图。必须保留原角色身份锚点，只允许改变当前描述明确提到的状态、服装、阶段、伤痕或装备。"
       : "角色设定图。必须优先遵循角色描述，不要生成模板化通用人物。",
@@ -324,9 +382,11 @@ export function buildSceneAssetPrompt(input: BuildRoleAssetPromptInput) {
   const describe = normalizeText(input.describe);
   const anchors = extractScenePromptAnchors(input.prompt);
   const styleSummary = SCENE_STYLE_SUMMARY[input.artStyle || ""] || "遵循项目既定场景风格，保持空间结构、光影与材质一致。";
+  const styleGuard = buildAssetStyleGuard(input.artStyle);
 
   const lines = [
     styleSummary,
+    styleGuard,
     input.derivative
       ? "场景衍生设定图。必须保留原场景的空间结构、主材质和核心环境锚点，只允许改变当前描述明确提到的时段、天气、损坏状态、氛围或功能区。"
       : "场景设定图。必须优先遵循场景描述，不要生成模板化通用公寓、街道或数据中心。",
@@ -350,9 +410,11 @@ export function buildToolAssetPrompt(input: BuildRoleAssetPromptInput) {
   const describe = normalizeText(input.describe);
   const anchors = extractToolPromptAnchors(input.prompt);
   const styleSummary = TOOL_STYLE_SUMMARY[input.artStyle || ""] || "遵循项目既定道具风格，保持结构、材质和功能识别清晰。";
+  const styleGuard = buildAssetStyleGuard(input.artStyle);
 
   const lines = [
     styleSummary,
+    styleGuard,
     input.derivative
       ? "道具衍生设定图。必须保留原道具的核心结构、功能和身份锚点，只允许改变当前描述明确提到的状态、损伤、阶段、装配、能量激活或材质变化。"
       : "道具设定图。必须优先遵循道具描述，不要生成模板化通用商品或普通摆件。",

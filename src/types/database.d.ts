@@ -195,6 +195,116 @@ export interface o_storyboard {
   'trackId'?: number | null;
   'videoDesc'?: string | null;
 }
+export interface o_storyboardBoard {
+  'createTime'?: number | null;
+  'endIndex'?: number | null;
+  'errorReason'?: string | null;
+  'filePath'?: string | null;
+  'id'?: number;
+  'imageModel'?: string | null;
+  'imagePrompt'?: string | null;
+  'itemsPerBoard'?: number | null;
+  'labelMode'?: string | null;
+  'layout'?: string | null;
+  'projectId'?: number | null;
+  'ratio'?: string | null;
+  'scriptId'?: number | null;
+  'sourceHash'?: string | null;
+  'sourceType'?: string | null;
+  'startIndex'?: number | null;
+  'state'?: string | null;
+  'shotScript'?: string | null;
+  'storyboardIds'?: string | null;
+  'targetDuration'?: number | null;
+  'thumbPath'?: string | null;
+  'updateTime'?: number | null;
+}
+export interface o_storyboardBoardVideo {
+  'boardId'?: number | null;
+  'createTime'?: number | null;
+  'duration'?: number | null;
+  'errorReason'?: string | null;
+  'id'?: number;
+  'model'?: string | null;
+  'projectId'?: number | null;
+  'prompt'?: string | null;
+  'referenceMode'?: string | null;
+  'resolution'?: string | null;
+  'scriptId'?: number | null;
+  'state'?: string | null;
+  'updateTime'?: number | null;
+  'videoId'?: number | null;
+}
+export interface o_storyboardFirstScript {
+  'artStyle'?: string | null;
+  'assetSnapshot'?: string | null;
+  'createTime'?: number | null;
+  'directorManual'?: string | null;
+  'errorReason'?: string | null;
+  'id'?: number;
+  'inputHash'?: string | null;
+  'jobToken'?: string | null;
+  'projectId'?: number | null;
+  'projectName'?: string | null;
+  'projectType'?: string | null;
+  'promptVersion'?: string | null;
+  'scriptContentSnapshot'?: string | null;
+  'scriptId'?: number | null;
+  'scriptRevision'?: number | null;
+  'segmentCount'?: number | null;
+  'shotScript'?: string | null;
+  'shotScriptHash'?: string | null;
+  'state'?: string | null;
+  'targetDuration'?: number | null;
+  'updateTime'?: number | null;
+}
+export interface o_storyboardFirstImage {
+  'assetHash'?: string | null;
+  'createTime'?: number | null;
+  'errorReason'?: string | null;
+  'filePath'?: string | null;
+  'firstScriptId'?: number | null;
+  'id'?: number;
+  'imageModel'?: string | null;
+  'imagePrompt'?: string | null;
+  'imageQuality'?: string | null;
+  'imageSourceHash'?: string | null;
+  'invalidatedAt'?: number | null;
+  'isCurrent'?: number | null;
+  'jobToken'?: string | null;
+  'projectId'?: number | null;
+  'ratio'?: string | null;
+  'referenceSnapshot'?: string | null;
+  'scriptId'?: number | null;
+  'scriptRevision'?: number | null;
+  'shotScriptHash'?: string | null;
+  'shotScriptSnapshot'?: string | null;
+  'state'?: string | null;
+  'thumbPath'?: string | null;
+  'updateTime'?: number | null;
+  'version'?: number | null;
+}
+export interface o_storyboardFirstVideo {
+  'aspectRatio'?: string | null;
+  'audio'?: number | null;
+  'createTime'?: number | null;
+  'duration'?: number | null;
+  'errorReason'?: string | null;
+  'firstImageId'?: number | null;
+  'firstImageVersion'?: number | null;
+  'firstScriptId'?: number | null;
+  'id'?: number;
+  'imageSourceHash'?: string | null;
+  'jobToken'?: string | null;
+  'model'?: string | null;
+  'projectId'?: number | null;
+  'prompt'?: string | null;
+  'resolution'?: string | null;
+  'scriptId'?: number | null;
+  'state'?: string | null;
+  'updateTime'?: number | null;
+  'videoId'?: number | null;
+}
 export interface o_tasks {
   'describe'?: string | null;
   'id'?: number;
@@ -268,6 +378,11 @@ export interface DB {
   "o_skillAttribution": o_skillAttribution;
   "o_skillList": o_skillList;
   "o_storyboard": o_storyboard;
+  "o_storyboardBoard": o_storyboardBoard;
+  "o_storyboardBoardVideo": o_storyboardBoardVideo;
+  "o_storyboardFirstScript": o_storyboardFirstScript;
+  "o_storyboardFirstImage": o_storyboardFirstImage;
+  "o_storyboardFirstVideo": o_storyboardFirstVideo;
   "o_tasks": o_tasks;
   "o_user": o_user;
   "o_vendorConfig": o_vendorConfig;

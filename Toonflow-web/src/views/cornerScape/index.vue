@@ -82,13 +82,13 @@
           <t-popup :content="item.errorReason" v-else-if="item.state === '生成失败'">
             <t-empty type="fail" :title="$t('workbench.cornerScape.genFailed')" />
           </t-popup>
-          <t-image v-else class="image" :src="item.filePath ?? undefined" fit="contain" :preview="true" :lazy="true">
+          <t-image v-else class="image" :src="getAssetThumbSrc(item) ?? undefined" fit="contain" :preview="false" :lazy="true">
             <template #error>
               <t-empty type="fail" :title="$t('workbench.cornerScape.imageError')" />
             </template>
             <template #overlayContent>
               <div class="imageToolsWrap">
-                <ImageTools :src="item.filePath!" position="br" />
+                <ImageTools :src="getAssetOriginalSrc(item.filePath)!" position="br" />
               </div>
             </template>
           </t-image>
@@ -159,13 +159,13 @@
             <span class="generatingText">{{ $t("workbench.cornerScape.generating") }}</span>
           </div>
           <t-empty v-else-if="currentItem.state === '生成失败'" type="fail" :title="$t('workbench.cornerScape.genFailed')" />
-          <t-image v-else-if="currentItem.filePath" class="image" :src="currentItem.filePath" fit="contain">
+          <t-image v-else-if="currentItem.filePath" class="image" :src="getAssetThumbSrc(currentItem)" fit="contain">
             <template #error>
               <t-empty type="fail" :title="$t('workbench.cornerScape.imageError')" />
             </template>
             <template #overlayContent>
               <div class="imageToolsWrap show">
-                <ImageTools :src="currentItem.filePath!" position="br" />
+                <ImageTools :src="getAssetOriginalSrc(currentItem.filePath)!" position="br" />
               </div>
             </template>
           </t-image>
@@ -180,7 +180,7 @@
                 class="historyImageItem"
                 :class="{ selected: selectedHistoryId === item.id }"
                 @click.stop="toggleHistorySelect(item.id)">
-                <t-image :src="item.filePath" :style="{ width: '100px', minWidth: '100px', height: '100px' }" :lazy="true" fit="contain" />
+                <t-image :src="item.thumbSrc || item.filePath" :style="{ width: '100px', minWidth: '100px', height: '100px' }" :lazy="true" fit="contain" />
               </div>
             </div>
           </t-form-item>
@@ -249,6 +249,7 @@ import openAssetsSelector from "@/utils/assetsCheck";
 const { otherSetting } = storeToRefs(settingStore());
 interface Image {
   filePath: string;
+  thumbSrc?: string | null;
   id: number;
 }
 interface DataItem {
@@ -258,6 +259,7 @@ interface DataItem {
   name: string;
   prompt: string;
   filePath: string | null;
+  thumbSrc?: string | null;
   state: string;
   model: string;
   resolution: string;
@@ -342,16 +344,35 @@ const selectedIds = ref<number[]>([]);
 const previewImages = computed((): string[] => {
   const selectedImageList = dataList.value
     .filter((item) => selectedIds.value.includes(item.id) && item.filePath)
-    .map((item) => item.filePath as string);
+    .map((item) => getAssetOriginalSrc(item.filePath));
 
   if (selectedImageList.length > 0) {
     return selectedImageList;
   }
 
-  return dataList.value.filter((item) => item.filePath).map((item) => item.filePath as string);
+  return dataList.value.filter((item) => item.filePath).map((item) => getAssetOriginalSrc(item.filePath));
 });
 
 const hasPreviewImages = computed(() => previewImages.value.length > 0);
+
+function getAssetThumbSrc(item: { filePath?: string | null; thumbSrc?: string | null }) {
+  return item.thumbSrc || item.filePath || "";
+}
+
+function getAssetOriginalSrc(src?: string | null) {
+  if (!src) return "";
+  try {
+    const parsed = new URL(src, window.location.origin);
+    if (parsed.pathname.startsWith("/oss/smallImage/")) {
+      parsed.pathname = `/oss/${parsed.pathname.slice("/oss/smallImage/".length)}`;
+      parsed.search = "";
+      return /^https?:\/\//i.test(src) ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    // Fallback below handles plain paths.
+  }
+  return src.replace(/^\/oss\/smallImage\//, "/oss/");
+}
 
 const toggleSelect = (id: number) => {
   const idx = selectedIds.value.indexOf(id);
@@ -527,6 +548,7 @@ function regenerateItem() {
         name: item.name ?? $t("workbench.cornerScape.unnamed"),
         base64: "",
         prompt: editForm.prompt,
+        describe: editForm.describe,
         model: selectValue.value,
         id: item.id,
         resolution: editForm.resolution,
@@ -709,6 +731,7 @@ async function batchGenerationImage() {
         type: item.type ?? "props",
         name: item.name ?? $t("workbench.cornerScape.unnamed"),
         prompt: item.prompt,
+        describe: item.describe,
       })),
     });
     selectedIds.value = [];
@@ -753,12 +776,12 @@ async function pollingPromptAssets() {
         });
         (freshData as DataItem[]).forEach((fresh) => {
           const target = dataList.value.find((row) => row.id === fresh.id);
-          if (target) target.historyImages = fresh.historyImages;
+          if (target) Object.assign(target, fresh);
         });
         // 同步更新抽屉中的当前项
         if (currentItem.value) {
           const freshCurrent = (freshData as DataItem[]).find((d) => d.id === currentItem.value!.id);
-          if (freshCurrent) currentItem.value.historyImages = freshCurrent.historyImages;
+          if (freshCurrent) currentItem.value = freshCurrent;
         }
       } catch (e) {
         console.error("刷新历史图片失败:", e);
@@ -794,12 +817,12 @@ async function pollingImageAssets() {
         });
         (freshData as DataItem[]).forEach((fresh) => {
           const target = dataList.value.find((row) => row.id === fresh.id);
-          if (target) target.historyImages = fresh.historyImages;
+          if (target) Object.assign(target, fresh);
         });
         // 同步更新抽屉中的当前项
         if (currentItem.value) {
           const freshCurrent = (freshData as DataItem[]).find((d) => d.id === currentItem.value!.id);
-          if (freshCurrent) currentItem.value.historyImages = freshCurrent.historyImages;
+          if (freshCurrent) currentItem.value = freshCurrent;
         }
       } catch (e) {
         console.error("刷新历史图片失败:", e);

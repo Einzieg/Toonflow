@@ -357,9 +357,12 @@ async function createSubAgent(parentCtx: AgentContext) {
 
   //分镜图生成
   const run_sub_agent_storyboard_gen = tool({
-    description: "运行执行subAgent来完成分镜图生成相关任务",
+    description: "运行执行subAgent来完成分镜图生成相关任务。若用户语境是故事板先行，禁止调用本工具。",
     inputSchema: promptInput,
     execute: async ({ prompt }) => {
+      if (/(故事板先行|先出故事板|从剧本生成故事板图片|故事板转视频|单图故事板)/.test(`${parentCtx.text}\n${prompt}`)) {
+        return "已拦截：当前是故事板先行语境，应使用故事板先行工具，不调用分镜图生成子 Agent。";
+      }
       const skill = path.join(u.getPath("skills"), "production_execution_storyboard_gen.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
       return runAgent({
@@ -391,9 +394,12 @@ async function createSubAgent(parentCtx: AgentContext) {
 
   //分镜面板写入
   const run_sub_agent_storyboard_panel = tool({
-    description: "运行执行subAgent来完成分镜面板写入相关任务",
+    description: "运行执行subAgent来完成分镜面板写入相关任务。若用户语境是故事板先行，禁止调用本工具。",
     inputSchema: promptInput,
     execute: async ({ prompt }) => {
+      if (/(故事板先行|先出故事板|从剧本生成故事板图片|故事板转视频|单图故事板)/.test(`${parentCtx.text}\n${prompt}`)) {
+        return "已拦截：当前是故事板先行语境，应使用故事板先行工具，不调用分镜面板子 Agent。";
+      }
       const skill = path.join(u.getPath("skills"), "production_execution_storyboard_panel.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
 
@@ -526,10 +532,22 @@ async function consumeFullStream(
         throw chunk.error;
       }
     }
+    if (syncMsg) {
+      const newMsg = syncMsg();
+      if (newMsg !== msg) {
+        msg = newMsg;
+        text = msg.text();
+      }
+    }
     text.complete();
     msg.complete();
   } catch (err: any) {
     thinking?.complete();
+    if (err?.name === "AbortError" || err?.code === "ABORT_ERR") {
+      text.complete();
+      msg.stop();
+      throw err;
+    }
     const errMsg = err?.message ?? String(err);
     text.append(errMsg);
     text.error();

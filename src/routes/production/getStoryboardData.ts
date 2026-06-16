@@ -3,6 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { resolveEffectiveStoryboardAssetReferences } from "@/utils/effectiveAssetReference";
 const router = express.Router();
 
 export default router.post(
@@ -25,15 +26,7 @@ export default router.post(
     //获取相关资产
     const storyboardIds = storyboardData.map((s) => s.id as number);
 
-    // 修复：o_assets.id 关联 o_assets2Storyboard.assetId，按 storyboardId 过滤
-    const storyboardConfigs = await u
-      .db("o_assets2Storyboard")
-      .leftJoin("o_assets", "o_assets2Storyboard.assetId", "o_assets.id")
-      .leftJoin("o_image", "o_assets.imageId", "o_image.id")
-      .whereIn("o_assets2Storyboard.storyboardId", storyboardIds)
-      .orderBy("o_assets2Storyboard.storyboardId", "asc")
-      .orderBy("o_assets2Storyboard.rowid", "asc")
-      .select("o_assets2Storyboard.storyboardId", "o_assets.id as assetId", "o_assets.name", "o_assets.type", "o_image.filePath as avatar");
+    const storyboardConfigs = await resolveEffectiveStoryboardAssetReferences(storyboardIds);
 
     // 按 storyboardId 分组，生成 characters 列表
     const storyboardCharactersMap = storyboardConfigs.reduce<Record<number, { name: string; type: string; avatar?: string }[]>>((acc, cur) => {
@@ -45,8 +38,8 @@ export default router.post(
         name: cur.name ?? "",
         type: cur.type ?? "",
       };
-      if (cur.avatar) {
-        character.avatar = cur.avatar;
+      if (cur.filePath) {
+        character.avatar = cur.filePath;
       }
       acc[storyboardId].push(character);
       return acc;

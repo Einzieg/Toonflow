@@ -498,6 +498,158 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.unique(["id"]);
       },
     },
+    //故事板图片
+    {
+      name: "o_storyboardBoard",
+      builder: (table) => {
+        table.integer("id").notNullable();
+        table.integer("projectId");
+        table.integer("scriptId");
+        table.text("storyboardIds");
+        table.integer("startIndex");
+        table.integer("endIndex");
+        table.text("filePath");
+        table.text("thumbPath");
+        table.text("layout");
+        table.text("ratio");
+        table.integer("itemsPerBoard");
+        table.text("labelMode");
+        table.text("shotScript");
+        table.text("imagePrompt");
+        table.text("imageModel");
+        table.integer("targetDuration");
+        table.text("sourceType");
+        table.text("sourceHash");
+        table.text("state");
+        table.text("errorReason");
+        table.integer("createTime");
+        table.integer("updateTime");
+        table.primary(["id"]);
+        table.unique(["id"]);
+      },
+    },
+    //故事板图生视频
+    {
+      name: "o_storyboardBoardVideo",
+      builder: (table) => {
+        table.integer("id").notNullable();
+        table.integer("boardId");
+        table.integer("projectId");
+        table.integer("scriptId");
+        table.integer("videoId");
+        table.text("referenceMode");
+        table.text("model");
+        table.text("prompt");
+        table.integer("duration");
+        table.text("resolution");
+        table.text("state");
+        table.text("errorReason");
+        table.integer("createTime");
+        table.integer("updateTime");
+        table.primary(["id"]);
+        table.unique(["id"]);
+      },
+    },
+    //故事板先行分镜脚本
+    {
+      name: "o_storyboardFirstScript",
+      builder: (table) => {
+        table.integer("id").notNullable();
+        table.integer("projectId");
+        table.integer("scriptId");
+        table.text("inputHash");
+        table.text("shotScriptHash");
+        table.integer("scriptRevision");
+        table.text("promptVersion");
+        table.text("jobToken");
+        table.text("scriptContentSnapshot");
+        table.text("projectName");
+        table.text("projectType");
+        table.text("artStyle");
+        table.text("directorManual");
+        table.integer("targetDuration");
+        table.integer("segmentCount");
+        table.text("shotScript");
+        table.text("assetSnapshot");
+        table.text("state");
+        table.text("errorReason");
+        table.integer("createTime");
+        table.integer("updateTime");
+        table.primary(["id"]);
+        table.unique(["id"]);
+        table.index(["projectId", "scriptId"]);
+        table.index(["projectId", "scriptId", "inputHash"]);
+        table.index(["state"]);
+      },
+    },
+    //故事板先行图片
+    {
+      name: "o_storyboardFirstImage",
+      builder: (table) => {
+        table.integer("id").notNullable();
+        table.integer("projectId");
+        table.integer("scriptId");
+        table.integer("firstScriptId");
+        table.integer("scriptRevision");
+        table.text("shotScriptHash");
+        table.text("shotScriptSnapshot");
+        table.text("filePath");
+        table.text("thumbPath");
+        table.text("imagePrompt");
+        table.text("imageModel");
+        table.text("imageQuality");
+        table.text("ratio");
+        table.text("imageSourceHash");
+        table.text("assetHash");
+        table.text("referenceSnapshot");
+        table.integer("version");
+        table.integer("isCurrent");
+        table.integer("invalidatedAt");
+        table.text("jobToken");
+        table.text("state");
+        table.text("errorReason");
+        table.integer("createTime");
+        table.integer("updateTime");
+        table.primary(["id"]);
+        table.unique(["id"]);
+        table.index(["projectId", "scriptId"]);
+        table.index(["firstScriptId"]);
+        table.index(["firstScriptId", "isCurrent"]);
+        table.index(["imageSourceHash"]);
+        table.index(["state"]);
+      },
+    },
+    //故事板先行图生视频
+    {
+      name: "o_storyboardFirstVideo",
+      builder: (table) => {
+        table.integer("id").notNullable();
+        table.integer("projectId");
+        table.integer("scriptId");
+        table.integer("firstScriptId");
+        table.integer("firstImageId");
+        table.integer("videoId");
+        table.text("imageSourceHash");
+        table.integer("firstImageVersion");
+        table.text("model");
+        table.text("prompt");
+        table.integer("duration");
+        table.text("resolution");
+        table.text("aspectRatio");
+        table.integer("audio");
+        table.text("jobToken");
+        table.text("state");
+        table.text("errorReason");
+        table.integer("createTime");
+        table.integer("updateTime");
+        table.primary(["id"]);
+        table.unique(["id"]);
+        table.index(["projectId", "scriptId"]);
+        table.index(["firstImageId"]);
+        table.index(["videoId"]);
+        table.index(["state"]);
+      },
+    },
     //flowData-剧本
     {
       name: "o_agentWorkData",

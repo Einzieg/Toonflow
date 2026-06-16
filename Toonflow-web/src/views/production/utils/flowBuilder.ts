@@ -9,6 +9,9 @@ const NODE_IDS = {
   storyboardTable: "storyboardTable",
   storyboard: "storyboard",
   workbench: "workbench",
+  storyboardFirstScript: "storyboardFirstScript",
+  storyboardFirstImage: "storyboardFirstImage",
+  storyboardFirstVideo: "storyboardFirstVideo",
   poster: "poster",
 } as const;
 
@@ -102,6 +105,7 @@ export function useFlowBuilder(nodePositions: Ref<NodePositions>) {
           handleIds: {
             assets: `${ids.script}-assets`,
             source: `${ids.script}-source`,
+            storyboardFirst: `${ids.script}-storyboardFirst`,
           },
         },
       },
@@ -166,6 +170,41 @@ export function useFlowBuilder(nodePositions: Ref<NodePositions>) {
           handleIds: {
             target: `${ids.workbench}-target`,
             source: `${ids.workbench}-source`,
+          },
+        },
+      },
+      {
+        id: ids.storyboardFirstScript,
+        type: "storyboardFirstScript",
+        dragHandle: ".dragHandle",
+        position: positions[ids.storyboardFirstScript] || { x: 0, y: 900 },
+        data: {
+          handleIds: {
+            target: `${ids.storyboardFirstScript}-target`,
+            source: `${ids.storyboardFirstScript}-source`,
+          },
+        },
+      },
+      {
+        id: ids.storyboardFirstImage,
+        type: "storyboardFirstImage",
+        dragHandle: ".dragHandle",
+        position: positions[ids.storyboardFirstImage] || { x: 600, y: 900 },
+        data: {
+          handleIds: {
+            target: `${ids.storyboardFirstImage}-target`,
+            source: `${ids.storyboardFirstImage}-source`,
+          },
+        },
+      },
+      {
+        id: ids.storyboardFirstVideo,
+        type: "storyboardFirstVideo",
+        dragHandle: ".dragHandle",
+        position: positions[ids.storyboardFirstVideo] || { x: 1100, y: 900 },
+        data: {
+          handleIds: {
+            target: `${ids.storyboardFirstVideo}-target`,
           },
         },
       },
@@ -238,6 +277,33 @@ export function useFlowBuilder(nodePositions: Ref<NodePositions>) {
         target: ids.workbench,
         sourceHandle: `${ids.storyboard}-source`,
         targetHandle: `${ids.workbench}-target`,
+        animated: false,
+        style: edgeStyle,
+      },
+      {
+        id: `${ids.script}-${ids.storyboardFirstScript}`,
+        source: ids.script,
+        target: ids.storyboardFirstScript,
+        sourceHandle: `${ids.script}-storyboardFirst`,
+        targetHandle: `${ids.storyboardFirstScript}-target`,
+        animated: false,
+        style: edgeStyle,
+      },
+      {
+        id: `${ids.storyboardFirstScript}-${ids.storyboardFirstImage}`,
+        source: ids.storyboardFirstScript,
+        target: ids.storyboardFirstImage,
+        sourceHandle: `${ids.storyboardFirstScript}-source`,
+        targetHandle: `${ids.storyboardFirstImage}-target`,
+        animated: false,
+        style: edgeStyle,
+      },
+      {
+        id: `${ids.storyboardFirstImage}-${ids.storyboardFirstVideo}`,
+        source: ids.storyboardFirstImage,
+        target: ids.storyboardFirstVideo,
+        sourceHandle: `${ids.storyboardFirstImage}-source`,
+        targetHandle: `${ids.storyboardFirstVideo}-target`,
         animated: false,
         style: edgeStyle,
       },

@@ -4,9 +4,11 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { MAX_TRACK_DURATION_SECONDS, isFixedDurationSeedanceVideoModel, resolveVideoGenerationDuration } from "@/utils/storyboardTrack";
-import { REMOTE_VIDEO_URL_TTL_MS } from "@/utils/videoSource";
+import { MAX_TRACK_DURATION_SECONDS, isSeedance2VideoModel, resolveVideoGenerationDuration } from "@/utils/storyboardTrack";
+import { REMOTE_VIDEO_URL_TTL_MS, getPublicOssFileUrl } from "@/utils/videoSource";
+import { resolveEffectiveAssetReferences } from "@/utils/effectiveAssetReference";
 import path from "node:path";
+import sharp from "sharp";
 const router = express.Router();
 
 type Type = "imageReference" | "startImage" | "endImage" | "videoReference" | "audioReference";
@@ -60,10 +62,56 @@ function inferReferenceMediaType(filePath: string, typeHint?: string | null): Re
   return "image";
 }
 
-async function filePathToDataUrl(filePath: string, mediaType: ReferenceMediaType): Promise<string> {
-  const fileBuffer = await u.oss.getFile(filePath);
-  const ext = path.extname(String(filePath || "").split("?")[0]).toLowerCase();
+function getOriginalOssImagePath(filePath: string): string {
+  let normalized = String(filePath || "").trim();
+  try {
+    normalized = new URL(normalized, "http://toonflow.local").pathname;
+  } catch {}
+  normalized = decodeURIComponent(normalized).replace(/\\/g, "/").replace(/^\/+/, "");
+  while (/^(oss-preview|oss)\//.test(normalized)) {
+    normalized = normalized.replace(/^(oss-preview|oss)\//, "");
+  }
+  if (normalized.startsWith("smallImage/")) {
+    normalized = normalized.slice("smallImage/".length);
+  }
+  return normalized ? `/${normalized}` : filePath;
+}
+
+async function resolveReferenceFilePath(filePath: string, mediaType: ReferenceMediaType): Promise<string> {
+  if (mediaType !== "image") return filePath;
+  const originalPath = getOriginalOssImagePath(filePath);
+  if (originalPath !== filePath && (await u.oss.fileExists(originalPath))) {
+    return originalPath;
+  }
+  return filePath;
+}
+
+async function ensureImageMinShortEdge(fileBuffer: Buffer, minShortEdge: number): Promise<Buffer> {
+  if (minShortEdge <= 0) return fileBuffer;
+  const metadata = await sharp(fileBuffer).metadata();
+  const width = metadata.width || 0;
+  const height = metadata.height || 0;
+  const shortEdge = Math.min(width, height);
+  if (!width || !height || shortEdge > minShortEdge) return fileBuffer;
+
+  const scale = (minShortEdge + 1) / shortEdge;
+  const nextWidth = Math.ceil(width * scale);
+  const nextHeight = Math.ceil(height * scale);
+  return sharp(fileBuffer).rotate().resize(nextWidth, nextHeight, { fit: "fill" }).jpeg({ quality: 92 }).toBuffer();
+}
+
+async function filePathToDataUrl(filePath: string, mediaType: ReferenceMediaType, options: { minImageShortEdge?: number } = {}): Promise<string> {
+  const resolvedPath = await resolveReferenceFilePath(filePath, mediaType);
+  let fileBuffer = await u.oss.getFile(resolvedPath);
+  const ext = path.extname(String(resolvedPath || "").split("?")[0]).toLowerCase();
   const mimeType = MIME_BY_EXT[ext] || DEFAULT_MIME_BY_TYPE[mediaType];
+  if (mediaType === "image" && options.minImageShortEdge) {
+    const nextBuffer = await ensureImageMinShortEdge(fileBuffer, options.minImageShortEdge);
+    if (nextBuffer !== fileBuffer) {
+      fileBuffer = nextBuffer;
+      return `data:image/jpeg;base64,${fileBuffer.toString("base64")}`;
+    }
+  }
   return `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
 }
 
@@ -116,7 +164,10 @@ export default router.post(
   async (req, res) => {
     const { scriptId, projectId, prompt, uploadData, model, duration, resolution, audio, mode, trackId } = req.body;
     const effectiveDuration = resolveVideoGenerationDuration(model, duration);
-    const preferVolcengineAssetUri = isFixedDurationSeedanceVideoModel(model);
+    const [vendorId] = String(model || "").split(/:(.+)/);
+    const preferVolcengineAssetUri = vendorId === "volcengine" && isSeedance2VideoModel(model);
+    const preferPublicImageUrl = vendorId === "cliproxyapi";
+    const minImageShortEdge = vendorId === "longxia" ? 320 : 0;
     if (effectiveDuration > MAX_TRACK_DURATION_SECONDS) {
       return res.status(400).send(error(`当前轨道时长 ${effectiveDuration}s，超过可生成上限 ${MAX_TRACK_DURATION_SECONDS}s，请先重新拆分分镜轨道`));
     }
@@ -150,28 +201,16 @@ export default router.post(
           }];
         }
         if (item.sources === "assets") {
-          const assetData = await u
-            .db("o_assets")
-            .where("o_assets.id", item.id)
-            .leftJoin("o_image", "o_assets.imageId", "o_image.id")
-            .leftJoin({ parentAsset: "o_assets" }, "o_assets.assetsId", "parentAsset.id")
-            .select(
-              "o_image.filePath",
-              "o_image.type as imageType",
-              "o_assets.type as assetsType",
-              "o_assets.volcengineAssetUri",
-              "parentAsset.volcengineAssetUri as parentVolcengineAssetUri",
-            )
-            .first();
+          const [assetData] = await resolveEffectiveAssetReferences([item.id]);
           const volcengineAssetUri = normalizeVolcengineAssetUri(assetData?.volcengineAssetUri || assetData?.parentVolcengineAssetUri);
-          if (preferVolcengineAssetUri && assetData?.assetsType === "role" && volcengineAssetUri) {
+          if (preferVolcengineAssetUri && assetData?.type === "role" && volcengineAssetUri) {
             return [{
               type: "image" as const,
               assetUri: volcengineAssetUri,
             }];
           }
           if (!assetData?.filePath) return null;
-          const mediaType = inferReferenceMediaType(assetData.filePath, assetData.imageType || assetData.assetsType);
+          const mediaType = inferReferenceMediaType(assetData.filePath, assetData.type);
           return [{
             type: mediaType,
             filePath: assetData.filePath,
@@ -201,9 +240,15 @@ export default router.post(
           };
         }
         if (!item.filePath) return null;
+        if (preferPublicImageUrl && item.type === "image") {
+          return {
+            type: item.type,
+            base64: await getPublicOssFileUrl(item.filePath, req),
+          };
+        }
         return {
           type: item.type,
-          base64: await filePathToDataUrl(item.filePath, item.type),
+          base64: await filePathToDataUrl(item.filePath, item.type, { minImageShortEdge }),
         };
       }),
     );

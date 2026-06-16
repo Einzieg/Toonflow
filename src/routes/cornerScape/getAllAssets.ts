@@ -49,14 +49,20 @@ export default router.post(
       data.map(async (parent: any) => {
         const historyImages = await u.db("o_image").where("assetsId", parent.id).andWhere("state", "已完成").select("id", "filePath");
         const historyImagesWithUrl = await Promise.all(
-          historyImages.map(async (img: any) => ({
-            id: img.id,
-            filePath: img.filePath && (await u.oss.getSmallImageUrl(img.filePath)),
-          })),
+          historyImages.map(async (img: any) => {
+            const filePath = img.filePath ? await u.oss.getFileUrl(img.filePath) : "";
+            return {
+              id: img.id,
+              filePath,
+              thumbSrc: img.filePath ? await u.oss.getSmallImageUrl(img.filePath) : "",
+            };
+          }),
         );
+        const filePath = parent.filePath ? await u.oss.getFileUrl(parent.filePath!) : "";
         return {
           ...parent,
-          filePath: parent.filePath && (await u.oss.getSmallImageUrl(parent.filePath!)),
+          filePath,
+          thumbSrc: parent.filePath ? await u.oss.getSmallImageUrl(parent.filePath!) : "",
           historyImages: historyImagesWithUrl,
           relepedAudio:repleAssets[parent.id] ?? []
         };

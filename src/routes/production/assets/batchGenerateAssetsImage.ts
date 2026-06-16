@@ -5,8 +5,15 @@ import sharp from "sharp";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { Output } from "ai";
+import { buildAssetPrompt, buildAssetStyleGuard } from "@/utils/assetsPrompt";
 const router = express.Router();
 const runningAssetImageTasks = new Set<number>();
+const DEFAULT_IMAGE_CONCURRENCY = 10;
+
+function normalizeImageConcurrency(value: number | undefined) {
+  if (value == null || value === 5) return DEFAULT_IMAGE_CONCURRENCY;
+  return value;
+}
 
 async function generateDerivativePrompt(systemPrompt: string, userPrompt: string): Promise<string> {
   const newApiConfig = await u.db("o_vendorConfig").where("id", "new-api").select("inputValues", "enable").first();
@@ -66,7 +73,8 @@ export default router.post(
     concurrentCount: z.number().min(1).optional(),
   }),
   async (req, res) => {
-    const { assetIds, projectId, scriptId, concurrentCount = 5 } = req.body;
+    const { assetIds, projectId, scriptId } = req.body;
+    const concurrentCount = normalizeImageConcurrency(req.body.concurrentCount);
     const uniqueAssetIds: number[] = Array.from(new Set<number>(assetIds.filter((id: number) => Number.isInteger(id))));
     console.log(
       `[production.assets.batchGenerateAssetsImage] request project=${projectId} script=${scriptId} ids=${JSON.stringify(assetIds)} unique=${JSON.stringify(uniqueAssetIds)} concurrent=${concurrentCount}`,
@@ -184,20 +192,32 @@ export default router.post(
     const generateSingleAsset = async (item: any) => {
       const imageId = imageIdMap[item.id!];
       const typeConfig = promptRecord[item.type!] || promptRecord["role"];
+      const styleGuard = buildAssetStyleGuard(projectSettingData?.artStyle);
 
       try {
+        const promptGuard = buildAssetPrompt({
+          type: item.type as "role" | "scene" | "tool",
+          name: item.name,
+          describe: item.describe,
+          prompt: item.parentDescribe,
+          artStyle: projectSettingData?.artStyle,
+          derivative: true,
+        });
         const userPrompt = `
+              项目画风: ${projectSettingData?.artStyle || "未指定"}
+              ${promptGuard}
               父级资产描述: ${item.parentDescribe || "无详细描述"}
               当前资产描述: ${item.describe || "无详细描述"}`;
         console.log(`[production.assets.batchGenerateAssetsImage] prompt start asset=${item.id} name=${item.name} imageId=${imageId}`);
-        const text = await generateDerivativePrompt(`${typeConfig.prompt}`, userPrompt);
+        const text = await generateDerivativePrompt(`${typeConfig.prompt}\n\n${styleGuard}`, userPrompt);
         if (!text) throw new Error("衍生资产提示词生成为空");
-        await u.db("o_assets").where("id", item.id).update({ prompt: text });
+        const finalPrompt = `${text}\n\n${styleGuard}`;
+        await u.db("o_assets").where("id", item.id).update({ prompt: finalPrompt });
         console.log(`[production.assets.batchGenerateAssetsImage] prompt completed asset=${item.id} name=${item.name} imageId=${imageId}`);
 
         const imageBase64 = imageUrlRecord[item.assetsId!] ? await u.oss.getImageBase64(imageUrlRecord[item.assetsId!]) : null;
         const repeloadObj = {
-          prompt: text,
+          prompt: finalPrompt,
           size: projectSettingData?.imageQuality as "1K" | "2K" | "4K",
           aspectRatio: "16:9" as `${number}:${number}`,
         };
@@ -209,7 +229,7 @@ export default router.post(
           },
           {
             taskClass: "生成图片",
-            describe: "资产图片生成",
+            describe: `资产图片生成，名称：${item.name}，画风：${projectSettingData?.artStyle || "未指定"}，提示词：${finalPrompt}`,
             relatedObjects: JSON.stringify(repeloadObj),
             projectId: projectId,
           },
