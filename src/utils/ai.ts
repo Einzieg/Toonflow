@@ -387,11 +387,15 @@ class AiVideo {
     const modelName = await resolveModelName(this.key);
     const exec = async (mn: `${string}:${string}`) => {
       const fn = await getVendorTemplateFn("videoRequest", mn);
-      await referenceList2imageBase642(mn.split(/:(.+)/)[0], input);
+      const attemptInput = {
+        ...input,
+        referenceList: input.referenceList?.map((item) => ({ ...item })),
+      };
+      await referenceList2imageBase642(mn.split(/:(.+)/)[0], attemptInput);
 
-      const result = await fn(input);
+      const result = await fn(attemptInput);
       this.result = typeof result === "string" ? result : "";
-      if (this.result.startsWith("http") && !input.preserveRemoteUrl) this.result = await urlToBase64(this.result);
+      if (this.result.startsWith("http") && !attemptInput.preserveRemoteUrl) this.result = await urlToBase64(this.result);
       return this;
     };
     if (taskRecord) {

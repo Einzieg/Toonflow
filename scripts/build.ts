@@ -17,6 +17,7 @@ const external = [
   "sqlite3",
   "better-sqlite3",
   "sharp",
+  "ffmpeg-static",
   "mysql",
   "mysql2",
   "pg",
@@ -68,12 +69,33 @@ const mainBuildConfig: esbuild.BuildOptions = {
   },
 };
 
+function copyFfmpegBinary() {
+  let ffmpegPath = "";
+  try {
+    ffmpegPath = require("ffmpeg-static");
+  } catch (error) {
+    console.warn("⚠️ 未找到 ffmpeg-static，视频尾帧抽取将依赖系统 ffmpeg");
+    return;
+  }
+  if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
+    console.warn("⚠️ ffmpeg-static 未提供可用二进制，视频尾帧抽取将依赖系统 ffmpeg");
+    return;
+  }
+
+  const targetPath = path.resolve("data/serve/ffmpeg");
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.copyFileSync(ffmpegPath, targetPath);
+  fs.chmodSync(targetPath, 0o755);
+  console.log(`✅ ffmpeg 二进制已复制: ${targetPath}`);
+}
+
 (async () => {
   try {
     console.log("🔨 开始构建...\n");
 
     // 并行构建
     await Promise.all([esbuild.build(appBuildConfig), esbuild.build(mainBuildConfig)]);
+    copyFfmpegBinary();
 
     console.log("✅ 后端服务构建完成: build/app.js");
     console.log("✅ Electron主进程构建完成: build/main.js");

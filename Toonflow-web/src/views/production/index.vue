@@ -19,10 +19,10 @@
       <scriptNode v-memo="[scriptNodeMemo]" :id="props.id" v-model="flowData.script" :handleIds="props.data.handleIds" />
     </template>
     <template #node-scriptPlan="props">
-      <scriptPlan v-memo="[scriptPlanNodeMemo]" :id="props.id" v-model="flowData.scriptPlan" :handleIds="props.data.handleIds" />
+      <scriptPlan :id="props.id" v-model="flowData.scriptPlan" :handleIds="props.data.handleIds" />
     </template>
     <template #node-storyboardTable="props">
-      <storyboardTable v-memo="[storyboardTableNodeMemo]" :id="props.id" v-model="flowData.storyboardTable" :handleIds="props.data.handleIds" />
+      <storyboardTable :id="props.id" v-model="flowData.storyboardTable" :handleIds="props.data.handleIds" />
     </template>
     <template #node-assets="props">
       <assets v-memo="[assetsNodeMemo]" :id="props.id" v-model="flowData.assets" :handleIds="props.data.handleIds" />
@@ -87,6 +87,18 @@
             </template>
           </t-button>
         </t-tooltip>
+        <t-tooltip placement="bottom" theme="primary" content="故事板工作区">
+          <t-button
+            class="storyboard-workspace-btn"
+            :disabled="!episodesId"
+            @click="storyboardWorkspaceVisible = true"
+            variant="outline"
+            style="margin-left: 8px">
+            <template #icon>
+              <i-blackboard size="16" />
+            </template>
+          </t-button>
+        </t-tooltip>
         <i-loading-four class="spin" size="16" style="margin-left: 0.5rem" v-show="loading"></i-loading-four>
         <!-- <t-tooltip theme="primary" content="$t('workbench.production.autoLayoutTB')">
           <div class="item c" @click="layoutGraph('TB')">
@@ -103,6 +115,21 @@
     </div>
     <t-guide v-model="current" :steps="steps" @finish="() => (current = -1)" />
   </VueFlow>
+  <t-dialog
+    v-model:visible="storyboardWorkspaceVisible"
+    header="故事板工作区"
+    :footer="false"
+    attach="body"
+    placement="center"
+    width="92vw"
+    class="storyboardWorkspaceDialog">
+    <storyboardBoardPanel
+      v-if="storyboardWorkspaceVisible"
+      :project-id="Number(project?.id) || undefined"
+      :script-id="episodesId"
+      :storyboard="flowData.storyboard"
+      :project-video-model="project?.videoModel" />
+  </t-dialog>
 </template>
 
 <script setup lang="ts">
@@ -124,6 +151,7 @@ import workbench from "./node/workbench.vue";
 import storyboardFirstScript from "./node/storyboardFirstScript.vue";
 import storyboardFirstImage from "./node/storyboardFirstImage.vue";
 import storyboardFirstVideo from "./node/storyboardFirstVideo.vue";
+import storyboardBoardPanel from "./node/storyboardBoardPanel.vue";
 import poster from "./node/poster.vue";
 import { useLayout } from "./utils/dagre";
 import { useFlowBuilder } from "./utils/flowBuilder";
@@ -134,6 +162,7 @@ const { project } = storeToRefs(projectStore());
 import settingStore from "@/stores/setting";
 const { canvasWheelEvent, otherSetting } = storeToRefs(settingStore());
 const openShowVisible = useLocalStorage("productionRightChatOpen", false);
+const storyboardWorkspaceVisible = ref(false);
 const rightChatBox = defineAsyncComponent(() => import("./components/rightChatBox/index.vue"));
 const {
   toObject,
@@ -655,6 +684,13 @@ const steps = [
     display: none !important;
   }
 }
+
+:global(.storyboardWorkspaceDialog .t-dialog__body) {
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+  padding: 16px;
+}
+
 $handelSize: 12px;
 
 :deep(.source) {

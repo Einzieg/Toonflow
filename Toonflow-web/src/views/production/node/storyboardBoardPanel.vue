@@ -53,15 +53,25 @@
       <t-select v-model="resolution" size="small" class="smallSelect" :disabled="!resolutionOptions.length">
         <t-option v-for="item in resolutionOptions" :key="item" :value="item" :label="item" />
       </t-select>
-      <t-switch v-model="audio" size="small" :disabled="selectedModelDetail?.audio === false" />
+      <t-switch v-model="audio" size="small" :disabled="selectedModelDetail?.audio === false" @change="audioTouched = true" />
       <span class="audioLabel">音频</span>
     </div>
+
+    <t-alert
+      class="workbenchHint"
+      theme="info"
+      message="故事板视频的提示词编辑、生成提示词和生成视频入口已接入：视频生产工作台 → 视频生成 → 模式选择「故事板模式」。本工作区只负责故事板图片创建、重生成和调试预览。" />
 
     <t-alert v-if="!singleImageVideoModels.length && !modelLoading" theme="warning" message="没有可用的单图视频模型，请先在设置中启用支持 singleImage 的视频模型。" />
 
     <div v-if="boards.length" class="boardList">
       <div v-for="board in boards" :key="board.id" class="boardCard">
-        <img class="boardThumb" :src="board.thumbUrl || board.imageUrl" loading="lazy" @click="previewBoard(board)" />
+        <div class="boardThumbWrap" @click="previewBoard(board)">
+          <img v-if="board.thumbUrl || board.imageUrl" class="boardThumb" :src="board.thumbUrl || board.imageUrl" loading="lazy" />
+          <div v-else class="boardThumb boardThumbPlaceholder">
+            <span>{{ board.state === "生成中" ? "等待生成" : "无故事板图" }}</span>
+          </div>
+        </div>
         <div class="boardInfo">
           <div class="boardName">{{ formatBoardRange(board) }}</div>
           <div class="boardMeta">
@@ -82,6 +92,11 @@
           <t-button size="small" theme="primary" :loading="generatingBoardId === board.id" :disabled="board.state !== '已完成' || !selectedModel" @click="generateVideo(board)">
             故事板图生视频
           </t-button>
+          <t-button size="small" variant="outline" :disabled="!board.videoReferenceFrames?.length" @click="previewReferenceFrames(board)">参考帧</t-button>
+          <t-button size="small" variant="outline" :disabled="!board.requestImageUrl" @click="previewRequestImage(board)">请求图</t-button>
+          <t-button size="small" variant="outline" :disabled="!board.video?.prompt && !board.shotTimelineItems?.length" @click="openDebugDialog(board)">
+            提示词
+          </t-button>
           <t-button size="small" variant="outline" :disabled="!board.video?.src" @click="previewVideo(board)">预览视频</t-button>
           <t-button size="small" variant="outline" :disabled="!board.imageUrl" @click="openUrl(board.imageUrl)">下载图片</t-button>
           <t-button size="small" variant="outline" :disabled="!board.video?.src" @click="openUrl(board.video?.src || '')">下载视频</t-button>
@@ -94,6 +109,33 @@
     <t-image-viewer v-model:visible="imagePreviewVisible" :images="imagePreviewImages" :imageScale="{ max: 10, min: 0.1 }" />
     <t-dialog v-model:visible="videoPreviewVisible" header="故事板视频预览" width="760px" :footer="false">
       <video v-if="currentVideoSrc" class="videoPreview" :src="currentVideoSrc" controls autoplay />
+    </t-dialog>
+    <t-dialog v-model:visible="debugVisible" header="故事板视频调试信息" width="980px" :footer="false" class="storyboardDebugDialog">
+      <div v-if="debugBoard" class="debugPanel">
+        <t-space class="debugActions">
+          <t-button size="small" variant="outline" :disabled="!debugBoard.requestImageUrl" @click="previewRequestImage(debugBoard)">预览实际请求图</t-button>
+          <t-button size="small" variant="outline" :disabled="!debugBoard.videoReferenceFrames?.length" @click="previewReferenceFrames(debugBoard)">预览视频参考帧</t-button>
+          <t-button size="small" variant="outline" :disabled="!debugBoard.video?.prompt" @click="copyText(debugBoard.video?.prompt || '')">复制 prompt</t-button>
+        </t-space>
+        <div class="debugMeta">
+          {{ formatBoardRange(debugBoard) }} · 模型：{{ debugBoard.video?.model || selectedModel || "-" }} · 时长：{{ debugBoard.video?.duration || duration }}s ·
+          Prompt 长度：{{ debugBoard.video?.promptLength || debugBoard.video?.prompt?.length || 0 }} 字符 / {{ debugBoard.video?.promptBytes || 0 }} bytes
+        </div>
+        <t-tabs default-value="prompt">
+          <t-tab-panel value="prompt" label="实际 prompt">
+            <pre class="debugText">{{ debugBoard.video?.prompt || "尚未生成视频 prompt" }}</pre>
+          </t-tab-panel>
+          <t-tab-panel value="timeline" label="shotTimeline">
+            <pre class="debugText">{{ formatJson(debugBoard.shotTimelineItems || []) }}</pre>
+          </t-tab-panel>
+          <t-tab-panel value="narrative" label="lockedNarrative">
+            <pre class="debugText">{{ formatJson(debugBoard.lockedNarrativeData || {}) }}</pre>
+          </t-tab-panel>
+          <t-tab-panel value="script" label="分镜头脚本">
+            <pre class="debugText">{{ debugBoard.shotScript || "无分镜头脚本" }}</pre>
+          </t-tab-panel>
+        </t-tabs>
+      </div>
     </t-dialog>
   </div>
 </template>
@@ -110,11 +152,22 @@ interface StoryboardBoardVideo {
   videoId: number;
   model: string;
   prompt: string;
+  promptLength?: number;
+  promptBytes?: number;
   duration: number;
   resolution: string;
   state: BoardState;
   errorReason?: string;
   src?: string;
+}
+
+interface StoryboardVideoReferenceFrame {
+  shotNo: number;
+  filePath: string;
+  duration: number;
+  imageUrl: string;
+  thumbUrl?: string;
+  owned?: boolean;
 }
 
 interface StoryboardBoard {
@@ -135,6 +188,13 @@ interface StoryboardBoard {
   imageModel?: string;
   sourceType?: string;
   targetDuration?: number;
+  videoReferencePath?: string;
+  videoReferenceUrl?: string;
+  requestImageUrl?: string;
+  videoReferenceMode?: string;
+  videoReferenceFrames?: StoryboardVideoReferenceFrame[];
+  shotTimelineItems?: any[];
+  lockedNarrativeData?: any;
   state: BoardState;
   errorReason?: string;
   video?: StoryboardBoardVideo | null;
@@ -175,12 +235,17 @@ const layout = ref("script");
 const selectedModel = ref("");
 const duration = ref(6);
 const resolution = ref("");
-const audio = ref(false);
+const audio = ref(true);
+const audioTouched = ref(false);
 const singleImageVideoModels = ref<SingleImageVideoModel[]>([]);
 const imagePreviewVisible = ref(false);
 const imagePreviewImages = ref<string[]>([]);
 const videoPreviewVisible = ref(false);
 const currentVideoSrc = ref("");
+const debugVisible = ref(false);
+const debugBoard = ref<StoryboardBoard | null>(null);
+const GROK_VIDEO_DURATIONS = [4, 5, 6, 7, 8, 9, 10] as const;
+const GROK_VIDEO_15_PREVIEW_DURATIONS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const storyboardCount = computed(() => props.storyboard.length);
@@ -222,7 +287,7 @@ const resolutionOptions = computed(() => {
   });
   return Array.from(resolutions);
 });
-const hasRunningTask = computed(() => boards.value.some((item) => item.state === "生成中" || item.video?.state === "生成中"));
+const hasRunningTask = computed(() => boards.value.some((item) => item.video?.state === "生成中"));
 
 function modeSupportsSingleImage(mode: unknown) {
   if (!Array.isArray(mode)) return false;
@@ -234,13 +299,16 @@ function isGrokVideoModel(modelId: string, detail: VideoModelDetail) {
   return value.includes("grok-imagine-video") || (value.includes("grok") && value.includes("imagine") && value.includes("video"));
 }
 
-function isGrokImagineVideo15PreviewModel(modelId: string, detail: VideoModelDetail) {
+function isGrokVideo15PreviewModel(modelId: string, detail: VideoModelDetail) {
   const value = `${modelId} ${detail.name} ${detail.modelName}`.toLowerCase().replace(/\s+/g, "");
   return value.includes("grok-imagine-video-1.5-preview") || value.includes("grokimaginevideo1.5preview");
 }
 
 function getGrokVideoDurations(modelId: string, detail: VideoModelDetail) {
-  return isGrokImagineVideo15PreviewModel(modelId, detail) ? [6, 10, 15] : [6, 10];
+  if (isGrokVideo15PreviewModel(modelId, detail)) {
+    return [...GROK_VIDEO_15_PREVIEW_DURATIONS];
+  }
+  return [...GROK_VIDEO_DURATIONS];
 }
 
 function normalizeModelDetail(modelId: string, detail: VideoModelDetail): VideoModelDetail {
@@ -288,9 +356,11 @@ function applyModelDefaults() {
   const resolutions = resolutionOptions.value;
   if (resolutions.length && !resolutions.includes(resolution.value)) resolution.value = resolutions[0];
   if (selectedModelDetail.value?.audio === false) audio.value = false;
+  else if (!audioTouched.value) audio.value = true;
 }
 
 function handleModelChange() {
+  audioTouched.value = false;
   applyModelDefaults();
 }
 
@@ -363,6 +433,38 @@ function previewVideo(board: StoryboardBoard) {
   if (!board.video?.src) return;
   currentVideoSrc.value = board.video.src;
   videoPreviewVisible.value = true;
+}
+
+function previewReferenceFrames(board: StoryboardBoard) {
+  const images = board.videoReferenceFrames?.map((item) => item.imageUrl).filter(Boolean) || [];
+  if (!images.length) return;
+  imagePreviewImages.value = images;
+  imagePreviewVisible.value = true;
+}
+
+function previewRequestImage(board: StoryboardBoard) {
+  if (!board.requestImageUrl) return;
+  imagePreviewImages.value = [board.requestImageUrl];
+  imagePreviewVisible.value = true;
+}
+
+function openDebugDialog(board: StoryboardBoard) {
+  debugBoard.value = board;
+  debugVisible.value = true;
+}
+
+function formatJson(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value || "");
+  }
+}
+
+async function copyText(value: string) {
+  if (!value) return;
+  await navigator.clipboard.writeText(value);
+  window.$message.success("已复制");
 }
 
 function openUrl(url: string) {
@@ -575,6 +677,10 @@ onUnmounted(() => {
     color: var(--td-text-color-secondary);
   }
 
+  .workbenchHint {
+    margin-bottom: 10px;
+  }
+
   .boardList {
     display: flex;
     flex-direction: column;
@@ -593,14 +699,34 @@ onUnmounted(() => {
     background: rgba(255, 255, 255, 0.86);
   }
 
+  .boardThumbWrap,
   .boardThumb {
     width: 128px;
     height: 82px;
-    object-fit: cover;
+  }
+
+  .boardThumbWrap {
     border-radius: 8px;
+    overflow: hidden;
+    background: #f4f1ea;
+  }
+
+  .boardThumb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
     border: 1px solid var(--td-border-level-1-color);
     cursor: zoom-in;
-    background: #f4f1ea;
+  }
+
+  .boardThumbPlaceholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--td-text-color-placeholder);
+    font-size: 12px;
+    cursor: default;
   }
 
   .boardName {
@@ -641,5 +767,32 @@ onUnmounted(() => {
   max-height: 70vh;
   background: #000;
   border-radius: 8px;
+}
+
+.debugPanel {
+  .debugActions {
+    margin-bottom: 10px;
+  }
+
+  .debugMeta {
+    margin-bottom: 10px;
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+  }
+
+  .debugText {
+    max-height: 58vh;
+    margin: 0;
+    padding: 12px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid var(--td-border-level-1-color);
+    border-radius: 8px;
+    background: #101418;
+    color: #e8edf2;
+    font-size: 12px;
+    line-height: 1.6;
+  }
 }
 </style>

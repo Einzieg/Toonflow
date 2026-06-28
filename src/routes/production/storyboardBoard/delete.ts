@@ -3,6 +3,7 @@ import { z } from "zod";
 import u from "@/utils";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { cleanupStoryboardVideoReferenceFiles } from "@/utils/storyboardVideoReference";
 
 const router = express.Router();
 
@@ -33,6 +34,10 @@ export default router.post(
 
     await deleteOssFileIfExists(board.filePath);
     await deleteOssFileIfExists(board.thumbPath);
+    await cleanupStoryboardVideoReferenceFiles({
+      videoReferencePath: board.videoReferencePath,
+      frameManifest: board.frameManifest,
+    });
     await Promise.all(deletableVideos.map((item: any) => deleteOssFileIfExists(item.filePath)));
 
     await u.db("o_storyboardBoardVideo").where("boardId", boardId).delete();

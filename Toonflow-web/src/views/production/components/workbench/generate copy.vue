@@ -649,7 +649,7 @@ const modeList = computed(() => {
     textReference: "文本",
   };
   return modeOptions.value.mode
-    ? modeOptions.value.mode.map((mode) =>
+    ? modeOptions.value.mode.map((mode: VideoMode) =>
         Array.isArray(mode)
           ? { value: JSON.stringify(mode), label: mode.map((m) => modeLabelMap[m] || m).join(" + ") + "参考" }
           : { value: mode, label: modeLabelMap[mode] || mode },
@@ -953,7 +953,7 @@ function pickStoryboard(sb: StoryboardItem) {
   }
   const item = uploadBox.value[pendingIndex.value];
   if (!item) return;
-  uploadBox.value[pendingIndex.value] = { ...item, sources: "storyboard", src: sb.src, id: sb.id, prompt: sb.prompt ?? undefined, index: sb.index };
+  uploadBox.value[pendingIndex.value] = { ...item, sources: "storyboard", src: sb.src, id: sb.id, prompt: sb.prompt ?? undefined, index: sb.index ?? undefined };
   saveUploadBoxToCache();
 }
 

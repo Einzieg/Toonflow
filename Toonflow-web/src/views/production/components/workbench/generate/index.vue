@@ -1,17 +1,34 @@
 <template>
-  <div class="index fc">
-    <div class="referenceImage">
+  <div class="index fc" :class="{ storyboardModeLayout: isStoryboardBoardMode }">
+    <div v-if="!isStoryboardBoardMode" class="referenceImage">
       <div class="uploadBtn">
-        <imageSelect :mode="modelParmas.mode as VideoMode" v-model="imageList" :storyboard-list="storyboardList" />
+        <imageSelect :mode="modelParmas.mode as VideoMode" v-model="imageList" :storyboard-list="storyboardList" @refresh="getGenerateData" />
       </div>
     </div>
     <div class="modelSelect">
-      <modeMenu v-model="modelParmas" :modeOptions="modeOptions" :trackId="currentTrack?.id" :modeList="modeList" @modeChange="modeChange" />
+      <modeMenu
+        v-model="modelParmas"
+        :modeOptions="modeOptions"
+        :trackId="currentTrack?.id"
+        :modeList="modeList"
+        @modeChange="modeChange"
+        @durationChange="handleDurationChange"
+        @modelChange="handleModelChange" />
     </div>
-    <div class="generate ac">
+    <div v-if="isStoryboardBoardMode" class="storyboardModeHost">
+      <storyboardBoardMode
+        :project-id="currentProjectId"
+        :script-id="currentScriptId"
+        :model-parmas="modelParmas"
+      />
+    </div>
+    <div v-else class="generate ac">
       <div class="prompt" v-if="currentTrack">
         <t-card :title="'#' + (activeTrackIndex + 1) + $t('workbench.generate.generateText')" header-bordered class="videoPrompt">
           <template #actions>
+            <t-button size="small" variant="outline" @click="togglePromptAgent">
+              {{ promptAgentVisible ? "收起助手" : "提示词助手" }}
+            </t-button>
             <t-button size="small" class="genTextbtn" :loading="activeTrackGenTextLoading" @click="genText">
               {{ $t("workbench.generate.generateText") }}
             </t-button>
@@ -19,6 +36,36 @@
           <div class="promptData fc">
             <div class="promptInput" @focusout="handlePromptBlur">
               <promptEditor v-model="currentTrack.prompt" :references="references" :placeholder="$t('workbench.generate.promptPlaceholder')" />
+            </div>
+            <div v-if="promptAgentVisible" class="promptAgent">
+              <div class="promptAgentHeader">
+                <span>视频提示词修改 Agent</span>
+                <span class="promptAgentHint">对话会直接改写并保存当前轨道提示词</span>
+              </div>
+              <div class="promptAgentMessages">
+                <div v-if="!currentPromptAgentMessages.length" class="promptAgentEmpty">
+                  例如：强化角色动作演进；补齐台词语气语速；压缩到 Grok 更容易理解的英文提示词。
+                </div>
+                <div
+                  v-for="(msg, index) in currentPromptAgentMessages"
+                  :key="`${msg.role}-${index}`"
+                  class="promptAgentMessage"
+                  :class="msg.role">
+                  <span class="messageRole">{{ msg.role === "user" ? "我" : "Agent" }}</span>
+                  <span class="messageContent">{{ msg.content }}</span>
+                </div>
+              </div>
+              <div class="promptAgentInputRow">
+                <t-textarea
+                  v-model="promptAgentInput"
+                  class="promptAgentInput"
+                  placeholder="输入修改要求，例如：让台词更紧凑，保留所有中文对白，镜头动作更连续"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  @keydown.ctrl.enter.prevent="sendPromptAgentMessage" />
+                <t-button theme="primary" :loading="promptAgentLoading" :disabled="!promptAgentInput.trim()" @click="sendPromptAgentMessage">
+                  发送并改写
+                </t-button>
+              </div>
             </div>
           </div>
         </t-card>
@@ -33,7 +80,7 @@
           @generate="generateVideo" />
       </div>
     </div>
-    <div class="track">
+    <div v-if="!isStoryboardBoardMode" class="track">
       <newTrack
         v-model:activeTrackIndex="activeTrackIndex"
         v-model:genTextLoadingMap="genTextLoadingMap"
@@ -54,6 +101,7 @@ import newTrack from "./components/track.vue";
 import imageSelect from "./components/imageSelect.vue";
 import modeMenu from "./components/modeMenu.vue";
 import videoCard from "./components/video.vue";
+import storyboardBoardMode from "./components/storyboardBoardMode.vue";
 import "@/views/production/components/workbench/type/type";
 import axios from "@/utils/axios";
 import projectStore from "@/stores/project";
@@ -61,8 +109,9 @@ import promptEditor from "@/components/promptEditor.vue";
 import imageListCacheStore from "@/stores/imageListCache";
 
 const VIDEO_PROMPT_TIMEOUT = 5 * 60 * 1000;
-const GROK_VIDEO_SUPPORTED_DURATIONS = [6, 10] as const;
-const GROK_IMAGINE_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS = [6, 10, 15] as const;
+const GROK_VIDEO_SUPPORTED_DURATIONS = [4, 5, 6, 7, 8, 9, 10] as const;
+const GROK_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
+const STORYBOARD_BOARD_MODE = "storyboardBoard";
 
 const { project } = storeToRefs(projectStore());
 const episodesId = inject<Ref<number>>("episodesId")!;
@@ -83,6 +132,19 @@ const modeOptions = ref<VideoModel>({
 const trackList = ref<TrackItem[]>([]); // 轨道列表
 const generatingMap = ref<Record<number, boolean>>({}); // trackId -> 是否正在提交生成请求
 let generateConfirmDialogOpen = false;
+const referenceSaveSeqMap = ref<Record<number, number>>({});
+const projectModelInitializedFor = ref<number | string | null>(null);
+const userSelectedModel = ref(false);
+
+type PromptAgentMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const promptAgentVisible = ref(false);
+const promptAgentInput = ref("");
+const promptAgentLoading = ref(false);
+const promptAgentMessagesMap = ref<Record<number, PromptAgentMessage[]>>({});
 
 const modelParmas = ref<ModelSetting>({
   mode: "",
@@ -93,9 +155,18 @@ const modelParmas = ref<ModelSetting>({
 });
 
 const storyboardList = ref<StoryboardItem[]>([]); // 分镜列表
+const isStoryboardBoardMode = computed(() => modelParmas.value.mode === STORYBOARD_BOARD_MODE);
+const currentProjectId = computed(() => (project.value?.id != null ? Number(project.value.id) : undefined));
+const currentScriptId = computed(() => (episodesId.value != null ? Number(episodesId.value) : undefined));
+const isEffectiveSingleImageMode = computed(
+  () => modelParmas.value.mode === "singleImage" || isGrokImagineVideo15PreviewModel(modelParmas.value.model, modeOptions.value.modelName),
+);
 
-/** 排序优先级：assets有图=0，storyboard有图=1，无图=2 */
+const FRAME_MODES = ["startEndRequired", "endFrameOptional", "startFrameOptional"];
+
+/** 排序优先级：单图模式优先显示分镜图；多参模式仍优先资产参考。 */
 function getImageItemPriority(item: UploadItem): number {
+  if (isEffectiveSingleImageMode.value && item.sources === "storyboard" && item.src) return 0;
   if (isVolcengineSeedance2Model(modelParmas.value.model, modeOptions.value.modelName) && item.volcengineAssetUri) return 0;
   if (item.src) return item.sources === "assets" ? 0 : 1;
   return 2;
@@ -107,26 +178,90 @@ function isUsableReferenceItem(item: UploadItem | TrackMedia | undefined) {
   return Boolean(item?.src || (useVolcengineAssetUri && item?.volcengineAssetUri));
 }
 
+function normalizeSingleReferenceList(items: (UploadItem | TrackMedia)[] | undefined): UploadItem[] {
+  const filtered = (items ?? []).filter((item) => isUsableReferenceItem(item) && item.id) as UploadItem[];
+  const storyboardItem = filtered.find((item) => item.sources === "storyboard" && item.src);
+  const selected = storyboardItem ?? filtered[0];
+  return selected ? [selected] : [];
+}
+
 function getCurrentTrackUploadData() {
   if (modelParmas.value.mode === "text") return [];
-  const frameMode = ["startEndRequired", "endFrameOptional", "startFrameOptional"];
-  const preSliced = frameMode.includes(modelParmas.value.mode)
-    ? imageList.value.slice(0, 2)
-    : modelParmas.value.mode === "singleImage"
-      ? imageList.value.slice(0, 1)
-      : imageList.value;
-  const filtered = preSliced.filter((item) => isUsableReferenceItem(item) && item.id).map(({ id, sources }) => ({ id, sources }));
-  if (frameMode.includes(modelParmas.value.mode)) return filtered.slice(0, 2);
-  if (modelParmas.value.mode === "singleImage") return filtered.slice(0, 1);
-  return filtered;
+  const filtered = imageList.value.filter((item) => isUsableReferenceItem(item) && item.id);
+  if (FRAME_MODES.includes(modelParmas.value.mode)) return filtered.slice(0, 2).map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
+  if (isEffectiveSingleImageMode.value) {
+    return normalizeSingleReferenceList(filtered).map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
+  }
+  return filtered.map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
 }
+
+function serializeTrackReferences(items: (UploadItem | TrackMedia)[]) {
+  return items
+    .filter((item) => item?.id != null && (item.sources === "storyboard" || item.sources === "assets"))
+    .map((item) => ({
+      id: Number(item.id),
+      sources: item.sources === "assets" ? "assets" : "storyboard",
+      referenceImageKind: item.sources === "storyboard" && (item.referenceImageKind === "grid" || item.referenceImageKind === "tailFrame")
+        ? item.referenceImageKind
+        : item.sources === "storyboard"
+          ? "storyboard"
+          : undefined,
+    }));
+}
+
+async function persistTrackReferences(trackId: number, items: (UploadItem | TrackMedia)[]) {
+  const projectId = Number(project.value?.id);
+  const scriptId = Number(episodesId.value);
+  if (!Number.isFinite(projectId) || !Number.isFinite(scriptId) || !Number.isFinite(trackId)) return;
+
+  const seq = (referenceSaveSeqMap.value[trackId] ?? 0) + 1;
+  referenceSaveSeqMap.value = { ...referenceSaveSeqMap.value, [trackId]: seq };
+  try {
+    await axios.post("/production/workbench/updateTrackReferences", {
+      projectId,
+      scriptId,
+      trackId,
+      items: serializeTrackReferences(items),
+    });
+    if (referenceSaveSeqMap.value[trackId] !== seq) return;
+    const targetTrack = trackList.value.find((item) => item.id === trackId);
+    if (targetTrack) targetTrack.referenceMediaLocked = true;
+  } catch (e) {
+    window.$message.error((e as Error)?.message ?? "参考图固定失败");
+  }
+}
+
+const effectiveReferenceItems = computed(() => {
+  if (!isEffectiveSingleImageMode.value) return imageList.value;
+  return normalizeSingleReferenceList(imageList.value);
+});
 
 function getModelDisplayName() {
   const [, modelName] = String(modelParmas.value.model || "").split(/:(.+)/);
   return modelName || modeOptions.value.modelName || modelParmas.value.model || "-";
 }
 
-function confirmGenerateVideo(trackIndex: number, referenceCount: number) {
+function getCurrentGenerateDuration() {
+  return clampDuration(Number(modelParmas.value.duration || currentTrack.value?.duration));
+}
+
+function getCurrentTrackDurationConfirmText(requestDuration: number) {
+  const sourceDuration = (currentTrack.value?.medias ?? [])
+    .filter((item) => item.sources === "storyboard")
+    .reduce((sum, item) => {
+      const duration = Number(item.duration);
+      return sum + (Number.isFinite(duration) && duration > 0 ? duration : 0);
+    }, 0);
+  if (!sourceDuration) return "";
+
+  const sourceText = Number(sourceDuration.toFixed(1));
+  if (Number.isFinite(requestDuration) && requestDuration > 0 && Math.abs(requestDuration - sourceDuration) > 0.01) {
+    return `轨道时长：请求 ${requestDuration}s，源分镜累计 ${sourceText}s；当前模型会按请求时长适配，不反写源分镜时长。`;
+  }
+  return `轨道时长：请求 ${requestDuration}s，源分镜累计 ${sourceText}s。`;
+}
+
+function confirmGenerateVideo(trackIndex: number, referenceCount: number, duration: number) {
   if (generateConfirmDialogOpen) return Promise.resolve(false);
   generateConfirmDialogOpen = true;
 
@@ -141,6 +276,7 @@ function confirmGenerateVideo(trackIndex: number, referenceCount: number) {
       resolve(confirmed);
     };
 
+    const durationText = getCurrentTrackDurationConfirmText(duration);
     dlg = DialogPlugin.confirm({
       header: $t("workbench.generate.generateConfirm"),
       body: [
@@ -148,12 +284,13 @@ function confirmGenerateVideo(trackIndex: number, referenceCount: number) {
         $t("workbench.generate.generateConfirmTrack", { index: trackIndex + 1 }),
         $t("workbench.generate.generateConfirmMeta", {
           model: getModelDisplayName(),
-          duration: modelParmas.value.duration,
+          duration,
           resolution: modelParmas.value.resolution,
           referenceCount,
         }),
+        durationText,
         $t("workbench.generate.generateConfirmCostHint"),
-      ].join("\n"),
+      ].filter(Boolean).join("\n"),
       confirmBtn: $t("workbench.generate.confirmGenerate"),
       cancelBtn: $t("workbench.generate.cancelGenerate"),
       closeBtn: false,
@@ -178,24 +315,26 @@ const imageList = computed({
       const cached = getCache(pid, sid, trackId);
       if (cached?.length) {
         cached.sort((a, b) => getImageItemPriority(a) - getImageItemPriority(b));
-        return cached;
+        return isEffectiveSingleImageMode.value ? normalizeSingleReferenceList(cached) : cached;
       }
     }
     const medias = currentTrack.value?.medias;
     if (!medias?.length) return [];
     (medias as UploadItem[]).sort((a, b) => getImageItemPriority(a) - getImageItemPriority(b));
-    return medias as UploadItem[];
+    return isEffectiveSingleImageMode.value ? normalizeSingleReferenceList(medias as UploadItem[]) : (medias as UploadItem[]);
   },
   set(val: UploadItem[]) {
     if (currentTrack.value) {
-      currentTrack.value.medias = val as any;
+      const nextVal = isEffectiveSingleImageMode.value ? normalizeSingleReferenceList(val) : val;
+      currentTrack.value.medias = nextVal as any;
       // 同步写入缓存
       const pid = project.value?.id;
       const sid = episodesId.value;
       const trackId = currentTrack.value.id;
       if (pid != null && sid != null && trackId != null) {
-        setCache(pid, sid, trackId, val);
+        setCache(pid, sid, trackId, nextVal);
       }
+      persistTrackReferences(currentTrack.value.id, nextVal);
     }
   },
 });
@@ -217,6 +356,7 @@ const modeList = computed(() => {
     imageReference: "图片",
     audioReference: "音频",
     textReference: "文本",
+    storyboardBoard: "故事板模式",
   };
   function parseRefLabel(m: string): string {
     const match = m.match(/^(videoReference|imageReference|audioReference|textReference):(\d+)$/);
@@ -226,13 +366,14 @@ const modeList = computed(() => {
     }
     return modeLabelMap[m] || m;
   }
-  return modeOptions.value.mode
+  const modelModes = modeOptions.value.mode
     ? modeOptions.value.mode.map((mode) =>
         Array.isArray(mode)
           ? { value: JSON.stringify(mode), label: mode.map((m) => parseRefLabel(m)).join(" + ") + "参考" }
           : { value: mode, label: modeLabelMap[mode] || mode },
       )
     : [];
+  return [...modelModes, { value: STORYBOARD_BOARD_MODE, label: modeLabelMap[STORYBOARD_BOARD_MODE] }];
 });
 const currentTrack = computed({
   get() {
@@ -241,6 +382,10 @@ const currentTrack = computed({
   set(val) {
     trackList.value[activeTrackIndex.value] = val;
   },
+});
+const currentPromptAgentMessages = computed(() => {
+  const trackId = currentTrack.value?.id;
+  return trackId != null ? promptAgentMessagesMap.value[trackId] ?? [] : [];
 });
 const activeTrackGenerating = computed(() => {
   const trackId = trackList.value[activeTrackIndex.value]?.id;
@@ -273,16 +418,18 @@ function isGrokImagineVideo15PreviewModel(model?: string | null, displayName?: s
 }
 
 function getGrokVideoSupportedDurations(model?: string | null, displayName?: string | null) {
-  return isGrokImagineVideo15PreviewModel(model, displayName)
-    ? [...GROK_IMAGINE_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS]
-    : [...GROK_VIDEO_SUPPORTED_DURATIONS];
+  if (isGrokImagineVideo15PreviewModel(model, displayName)) {
+    return [...GROK_VIDEO_15_PREVIEW_SUPPORTED_DURATIONS];
+  }
+  return [...GROK_VIDEO_SUPPORTED_DURATIONS];
 }
 
-function resolveGrokDuration(duration?: number | string | null, model?: string | null, displayName?: string | null) {
-  const durations = getGrokVideoSupportedDurations(model, displayName);
+function resolveGrokDuration(duration?: number | string | null) {
+  const durations = getGrokVideoSupportedDurations(modelParmas.value.model, modeOptions.value.modelName);
   const value = Number(duration);
   if (!Number.isFinite(value) || value <= 0) return durations[0];
-  return durations.find((item) => value <= item) ?? durations[durations.length - 1];
+  const clamped = Math.max(Math.min(...durations), Math.min(value, Math.max(...durations)));
+  return durations.reduce((best, current) => (Math.abs(current - clamped) <= Math.abs(best - clamped) ? current : best), durations[0]);
 }
 
 function normalizeModeOptions(data: VideoModel): VideoModel {
@@ -290,6 +437,7 @@ function normalizeModeOptions(data: VideoModel): VideoModel {
     const durations = getGrokVideoSupportedDurations(modelParmas.value.model, data.modelName);
     return {
       ...data,
+      mode: isGrokImagineVideo15PreviewModel(modelParmas.value.model, data.modelName) ? ["singleImage"] : data.mode,
       durationResolutionMap: data.durationResolutionMap?.map((item) => ({
         ...item,
         duration: durations,
@@ -302,7 +450,7 @@ function normalizeModeOptions(data: VideoModel): VideoModel {
 /** 将时长限制在模型支持的范围内 */
 function clampDuration(trackDuration: number): number {
   if (isGrokImagineVideoModel(modelParmas.value.model, modeOptions.value.modelName)) {
-    return resolveGrokDuration(trackDuration || modelParmas.value.duration, modelParmas.value.model, modeOptions.value.modelName);
+    return resolveGrokDuration(trackDuration || modelParmas.value.duration);
   }
   const drMap = modeOptions.value?.durationResolutionMap;
   if (Array.isArray(drMap) && drMap.length > 0 && drMap[0].duration?.length) {
@@ -324,7 +472,7 @@ watch(
         type: "video",
         mode: [],
       };
-      modelParmas.value.mode = "";
+      if (modelParmas.value.mode !== STORYBOARD_BOARD_MODE) modelParmas.value.mode = "";
       return;
     }
     axios.post("/modelSelect/getModelDetail", { modelId: val }).then(({ data }) => {
@@ -337,18 +485,34 @@ watch(
       }
 
       const currentParsed = parseMode(modelParmas.value.mode);
-      const modeMatched = data.mode.some((m: VideoMode) => {
-        if (Array.isArray(m) && Array.isArray(currentParsed)) {
-          return JSON.stringify(m) === JSON.stringify(currentParsed);
-        }
-        return m == currentParsed;
-      });
+      const modeMatched =
+        modelParmas.value.mode === STORYBOARD_BOARD_MODE ||
+        data.mode.some((m: VideoMode) => {
+          if (Array.isArray(m) && Array.isArray(currentParsed)) {
+            return JSON.stringify(m) === JSON.stringify(currentParsed);
+          }
+          return m == currentParsed;
+        });
       if (!modeMatched) {
         const newMode = Array.isArray(data.mode[0]) ? JSON.stringify(data.mode[0]) : data.mode[0];
         modeChange(newMode);
       }
     });
   },
+);
+watch(
+  () => [project.value?.videoModel, project.value?.mode],
+  ([videoModel, projectMode]) => {
+    const projectId = project.value?.id ?? null;
+    const projectChanged = projectModelInitializedFor.value !== projectId;
+    if (projectChanged) {
+      projectModelInitializedFor.value = projectId;
+      userSelectedModel.value = false;
+    }
+    if (videoModel && (projectChanged || (!userSelectedModel.value && !modelParmas.value.model))) modelParmas.value.model = String(videoModel);
+    if (projectMode && !modelParmas.value.mode) modelParmas.value.mode = String(projectMode);
+  },
+  { immediate: true },
 );
 function parseMode(value: string): VideoMode | null {
   if (!value) return null;
@@ -369,7 +533,7 @@ const references = computed(() => {
     return "image";
   }
 
-  return imageList.value
+  return effectiveReferenceItems.value
     .filter((item) => item.src)
     .map((item) => ({
       type: getFileTypeByExt(item.src) as "image" | "video" | "audio" | "text",
@@ -390,6 +554,13 @@ async function getGenerateData() {
   if (pid != null && sid != null) {
     // 同步脚本级缓存，删除已不存在轨道的旧缓存，并为新增轨道建立缓存。
     syncCacheFromTrackList(pid, sid, data.trackList);
+    if (isEffectiveSingleImageMode.value) {
+      data.trackList.forEach((track: TrackItem) => {
+        if (track.id == null) return;
+        track.medias = normalizeSingleReferenceList(track.medias as unknown as UploadItem[]) as unknown as TrackMedia[];
+        setCache(pid, sid, track.id, track.medias as unknown as UploadItem[]);
+      });
+    }
     // 批量向后端请求文件路径对应的完整 URL
     await warmUpUrls(pid, sid);
     // 将本地缓存回写到 trackList，确保优先使用缓存数据（src 已解析为完整 URL）
@@ -397,7 +568,7 @@ async function getGenerateData() {
       if (track.id == null) return;
       const cached = getCache(pid, sid, track.id);
       if (cached?.length) {
-        track.medias = cached as unknown as TrackMedia[];
+        track.medias = (isEffectiveSingleImageMode.value ? normalizeSingleReferenceList(cached) : cached) as unknown as TrackMedia[];
       }
     });
     // 整体赋值触发响应式
@@ -405,6 +576,18 @@ async function getGenerateData() {
   }
 
   modelParmas.value.duration = clampDuration(data.trackList?.[activeTrackIndex.value]?.duration);
+}
+
+function handleModelChange() {
+  userSelectedModel.value = true;
+}
+
+function handleDurationChange(duration: number) {
+  const nextDuration = clampDuration(duration);
+  modelParmas.value.duration = nextDuration;
+  if (currentTrack.value) {
+    currentTrack.value.duration = nextDuration;
+  }
 }
 /** 提示词失焦时保存到后端 */
 function handlePromptBlur() {
@@ -414,6 +597,55 @@ function handlePromptBlur() {
 }
 const genTextLoadingMap = ref<Record<number, boolean>>({}); // trackId -> 是否正在生成提示词
 
+function togglePromptAgent() {
+  promptAgentVisible.value = !promptAgentVisible.value;
+}
+
+async function sendPromptAgentMessage() {
+  const track = currentTrack.value;
+  const trackId = track?.id;
+  const message = promptAgentInput.value.trim();
+  if (!trackId || !message || promptAgentLoading.value) return;
+
+  const previousMessages = promptAgentMessagesMap.value[trackId] ?? [];
+  const nextMessages = [...previousMessages, { role: "user" as const, content: message }];
+  promptAgentMessagesMap.value = {
+    ...promptAgentMessagesMap.value,
+    [trackId]: nextMessages,
+  };
+  promptAgentInput.value = "";
+  promptAgentLoading.value = true;
+  try {
+    const { data } = await axios.post(
+      "/production/workbench/chatVideoPrompt",
+      {
+        projectId: project.value?.id,
+        scriptId: episodesId.value ?? 0,
+        trackId,
+        message,
+        currentPrompt: track.prompt || "",
+        model: modelParmas.value.model,
+        history: previousMessages.slice(-8),
+      },
+      { timeout: VIDEO_PROMPT_TIMEOUT },
+    );
+    track.prompt = data.prompt;
+    promptAgentMessagesMap.value = {
+      ...promptAgentMessagesMap.value,
+      [trackId]: [...nextMessages, { role: "assistant", content: data.reply || "已修改当前视频提示词。" }],
+    };
+    window.$message.success("视频提示词已由 Agent 修改");
+  } catch (e) {
+    promptAgentMessagesMap.value = {
+      ...promptAgentMessagesMap.value,
+      [trackId]: [...nextMessages, { role: "assistant", content: (e as Error)?.message || "修改失败" }],
+    };
+    window.$message.error((e as Error)?.message ?? "提示词助手修改失败");
+  } finally {
+    promptAgentLoading.value = false;
+  }
+}
+
 /** 单个轨道生成提示词 */
 async function genText() {
   if (currentTrack.value.id == null || genTextLoadingMap.value[currentTrack.value.id]) return;
@@ -421,22 +653,18 @@ async function genText() {
   const currentTrackId = currentTrack.value.id;
   const changeTrack = currentTrack.value;
   if (modelParmas.value.mode == "text") {
-    info = changeTrack?.medias.map(({ id, sources }) => ({ id, sources }));
+    info = changeTrack?.medias.map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
   } else {
     info =
       modelParmas.value.mode === "text"
         ? []
         : (() => {
-            const frameMode = ["startEndRequired", "endFrameOptional", "startFrameOptional"];
-            const preSliced = frameMode.includes(modelParmas.value.mode)
-              ? imageList.value.slice(0, 2)
-              : modelParmas.value.mode === "singleImage"
-                ? imageList.value.slice(0, 1)
-                : imageList.value;
-            const filtered = preSliced.filter((item) => item.id).map(({ id, sources }) => ({ id, sources }));
-            if (frameMode.includes(modelParmas.value.mode)) return filtered.slice(0, 2);
-            if (modelParmas.value.mode === "singleImage") return filtered.slice(0, 1);
-            return filtered;
+            const filtered = imageList.value.filter((item) => item.id);
+            if (FRAME_MODES.includes(modelParmas.value.mode)) return filtered.slice(0, 2).map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
+            if (isEffectiveSingleImageMode.value) {
+              return normalizeSingleReferenceList(filtered).map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
+            }
+            return filtered.map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
           })();
   }
   genTextLoadingMap.value[currentTrackId] = true;
@@ -448,6 +676,7 @@ async function genText() {
         trackId: currentTrackId,
         info: info,
         model: modelParmas.value.model,
+        duration: getCurrentGenerateDuration(),
       },
       { timeout: VIDEO_PROMPT_TIMEOUT },
     );
@@ -508,7 +737,8 @@ async function generateVideo() {
   const trackId = trackList.value[activeTrackIndex.value]?.id;
   if (trackId == null || generatingMap.value[trackId]) return;
   const uploadData = getCurrentTrackUploadData();
-  const confirmed = await confirmGenerateVideo(activeTrackIndex.value, uploadData.length);
+  const duration = getCurrentGenerateDuration();
+  const confirmed = await confirmGenerateVideo(activeTrackIndex.value, uploadData.length, duration);
   if (!confirmed) return;
 
   generatingMap.value[trackId] = true;
@@ -521,14 +751,19 @@ async function generateVideo() {
       model: modelParmas.value.model,
       mode: modelParmas.value.mode,
       resolution: modelParmas.value.resolution,
-      duration: modelParmas.value.duration,
+      duration,
       audio: modelParmas.value.audio,
       trackId,
     });
     window.$message.success($t("workbench.generate.generateStarted"));
     const targetTrack = trackList.value.find((item) => item.id === trackId);
+    const result = data as number | { id: number; prompt?: string };
+    const videoId = typeof result === "object" ? result.id : result;
+    if (typeof result === "object" && typeof result.prompt === "string" && targetTrack) {
+      targetTrack.prompt = result.prompt;
+    }
     targetTrack?.videoList.push({
-      id: data,
+      id: videoId,
       state: "生成中",
       src: "",
     });
@@ -567,17 +802,23 @@ async function getVideoList() {
     videoIds: hasGenerateVideoIds.value,
   });
   if (data && data.length) {
+    let shouldRefreshGenerateData = false;
     data.forEach((item: { id: number; state: "生成中" | "未生成" | "已完成" | "生成失败"; src?: string; errorReason?: string }) => {
       for (const track of trackList.value) {
         const findData = track.videoList.find((i) => i.id == item.id);
         if (findData) {
+          const wasCompleted = findData.state === "已完成";
           findData.state = item.state;
           findData.src = item?.src ?? "";
           findData.errorReason = item?.errorReason ?? "";
+          if (!wasCompleted && item.state === "已完成") shouldRefreshGenerateData = true;
           break;
         }
       }
     });
+    if (shouldRefreshGenerateData) {
+      window.setTimeout(() => getGenerateData(), 1500);
+    }
   }
 }
 watch(
@@ -601,6 +842,25 @@ onUnmounted(() => {
   height: calc(100vh - 120px);
   gap: 16px;
   overflow-y: auto;
+
+  &.storyboardModeLayout {
+    height: calc(100vh - 120px);
+    min-height: 640px;
+    overflow-y: auto;
+
+    .modelSelect {
+      flex: 0 0 auto;
+    }
+
+    .storyboardModeHost {
+      display: block;
+      flex: 0 0 auto;
+      width: 100%;
+      min-height: 620px;
+    }
+
+  }
+
   .referenceImage {
   }
   .modelSelect {
@@ -637,6 +897,76 @@ onUnmounted(() => {
             flex: 1;
             min-height: 0;
             overflow-y: auto;
+          }
+          .promptAgent {
+            flex-shrink: 0;
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid var(--td-component-border);
+            border-radius: 8px;
+            background: var(--td-bg-color-container-hover);
+          }
+          .promptAgentHeader {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--td-text-color-primary);
+          }
+          .promptAgentHint {
+            font-size: 12px;
+            font-weight: 400;
+            color: var(--td-text-color-secondary);
+          }
+          .promptAgentMessages {
+            max-height: 170px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 8px;
+          }
+          .promptAgentEmpty {
+            padding: 8px;
+            border-radius: 6px;
+            color: var(--td-text-color-secondary);
+            background: var(--td-bg-color-container);
+            font-size: 12px;
+            line-height: 1.5;
+          }
+          .promptAgentMessage {
+            display: flex;
+            gap: 6px;
+            align-items: flex-start;
+            font-size: 12px;
+            line-height: 1.5;
+            &.user .messageRole {
+              color: var(--td-brand-color);
+            }
+            &.assistant .messageRole {
+              color: var(--td-success-color);
+            }
+          }
+          .messageRole {
+            flex: 0 0 auto;
+            font-weight: 700;
+          }
+          .messageContent {
+            min-width: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--td-text-color-primary);
+          }
+          .promptAgentInputRow {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+          }
+          .promptAgentInput {
+            flex: 1;
           }
         }
       }

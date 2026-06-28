@@ -27,6 +27,9 @@ export interface DeriveAsset {
   src: string;
   thumbSrc?: string | null;
   flowId?: number;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
   state: "未生成" | "生成中" | "已完成" | "生成失败";
   type: "role" | "tool" | "scene" | "clip";
   errorReason?: string;
@@ -41,6 +44,9 @@ export interface AssetItem {
   thumbSrc?: string | null;
   state: "未生成" | "生成中" | "已完成" | "生成失败";
   type: "role" | "tool" | "scene" | "clip";
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
   flowId?: number;
   derive: DeriveAsset[];
   errorReason?: string;
@@ -49,6 +55,14 @@ export interface AssetItem {
 export interface Storyboard {
   id?: number;
   duration?: number;
+  shotMeta?: {
+    sourceShotNo?: number;
+    dialogueCharCount?: number | null;
+    estimatedSpeechRate?: string | null;
+    estimatedSpeechDuration?: number | null;
+    durationReason?: string | null;
+    durationReasonSource?: string | null;
+  } | null;
   prompt: string;
   trackId?: number;
   associateAssetsIds?: number[];
@@ -72,10 +86,23 @@ interface VideoList {
 export interface FlowData {
   script: string;
   scriptPlan: string;
+  shotPlan?: unknown | null;
+  shotPolicy?: unknown | null;
+  targetDuration?: number | null;
+  targetDurationSource?: string | null;
+  scriptTargetDuration?: number | null;
+  scriptTargetDurationSource?: string | null;
+  scriptTargetDurationRaw?: string | null;
   assets: AssetItem[];
   storyboardTable: string;
   storyboard: Storyboard[];
   workbench: {
+    name: string;
+    duration: string;
+    resolution: string;
+    fps: string;
+    cover?: string;
+    gradient?: string;
     videoList: VideoList[];
   };
 }

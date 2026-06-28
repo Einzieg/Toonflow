@@ -40,6 +40,7 @@ data/serve/
 
 upload/*
 uploads/*
+dev_docs/*
 
 db.sqlite
 db.sqlite-shm

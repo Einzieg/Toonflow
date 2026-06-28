@@ -551,9 +551,14 @@ interface Asset {
   describe: string;
   remark: string;
   volcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
   src: string;
   type: "role" | "tool" | "scene" | "clip"; // "角色" | "道具" | "场景" | "素材"
   state: string;
+  model?: string;
+  resolution?: string;
   sonAssets?: Asset[]; // 子资产列表
   imageId: number;
   promptState: string;
@@ -629,7 +634,18 @@ function selectAssetOptions(value: TabValue) {
   pagination.value.page = 1;
   loadCurrentTabData();
 }
-const formData = ref<{ id: number; name: string; describe: string; remark: string; src?: string; prompt: string; volcengineAssetUri?: string | null }>({
+const formData = ref<{
+  id: number;
+  name: string;
+  describe: string;
+  remark: string;
+  src?: string;
+  prompt: string;
+  volcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
+}>({
   id: 0,
   name: "",
   describe: "",
@@ -637,6 +653,9 @@ const formData = ref<{ id: number; name: string; describe: string; remark: strin
   src: "",
   prompt: "",
   volcengineAssetUri: "",
+  voiceProfile: "",
+  voiceTone: "",
+  speechRate: "",
 });
 const addAssetsShow = ref(false);
 // 新增
@@ -681,15 +700,21 @@ async function handleAdd(type: string) {
       remark: "",
       prompt: "",
       volcengineAssetUri: "",
+      voiceProfile: "",
+      voiceTone: "",
+      speechRate: "",
     };
   }
 }
 const batchGenerationShow = ref(false);
 const selectValue = ref(""); //选择的模型
-const resolution = ref("1K"); //选择的分辨率
+const resolution = ref(project.value?.imageQuality || "1K"); //选择的分辨率
 const batchType = ref("");
 function batchGeneration(type: number) {
   batchType.value = type === 1 ? $t("workbench.assets.batchGenPrompt") : $t("workbench.assets.batchGenImage");
+  if (type !== 1 && !resolution.value) {
+    resolution.value = project.value?.imageQuality || "1K";
+  }
   batchGenerationShow.value = true;
 }
 function keep() {
@@ -887,6 +912,27 @@ const columns: TableProps["columns"] = [
     ellipsis: true,
   },
   {
+    colKey: "voiceProfile",
+    title: "声线",
+    width: 140,
+    align: "left",
+    ellipsis: true,
+  },
+  {
+    colKey: "voiceTone",
+    title: "语气",
+    width: 140,
+    align: "left",
+    ellipsis: true,
+  },
+  {
+    colKey: "speechRate",
+    title: "语速",
+    width: 120,
+    align: "left",
+    ellipsis: true,
+  },
+  {
     colKey: "describe",
     title: $t("workbench.assets.colDescribe"),
     width: 200,
@@ -952,6 +998,27 @@ const subColumns: TableProps["columns"] = [
     colKey: "volcengineAssetUri",
     title: $t("workbench.assets.colVolcengineAssetUri"),
     width: 180,
+    align: "left",
+    ellipsis: true,
+  },
+  {
+    colKey: "voiceProfile",
+    title: "声线",
+    width: 140,
+    align: "left",
+    ellipsis: true,
+  },
+  {
+    colKey: "voiceTone",
+    title: "语气",
+    width: 140,
+    align: "left",
+    ellipsis: true,
+  },
+  {
+    colKey: "speechRate",
+    title: "语速",
+    width: 120,
     align: "left",
     ellipsis: true,
   },
@@ -1128,6 +1195,7 @@ const currentAssetData = ref<{
   describe?: string;
   type?: string;
   prompt?: string;
+  resolution?: string;
   src: string;
 }>({
   id: undefined,
@@ -1135,6 +1203,7 @@ const currentAssetData = ref<{
   describe: "",
   type: "",
   prompt: "",
+  resolution: "",
   src: "",
 });
 function generate(row: any) {
@@ -1144,6 +1213,7 @@ function generate(row: any) {
     describe: row.describe,
     type: row.type,
     prompt: row.prompt,
+    resolution: row.resolution || project.value?.imageQuality || "1K",
     src: row.src,
   };
   generateImageShow.value = true;
@@ -1211,6 +1281,9 @@ function handleEdit(row: any) {
     formData.value = {
       ...row,
       volcengineAssetUri: row.volcengineAssetUri || "",
+      voiceProfile: row.voiceProfile || "",
+      voiceTone: row.voiceTone || "",
+      speechRate: row.speechRate || "",
     };
     addAssetsShow.value = true;
   }

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { buildAssetPrompt } from "@/utils/assetsPrompt";
+import { mediaPromptSafetyInstruction } from "@/utils/promptSafety";
 
 const router = express.Router();
 
@@ -67,6 +68,7 @@ function buildPrompt(cfg: AssetTypeConfig, type: AssetType, artStyle: string, na
 
     **最终生图约束：**
     ${assetPrompt}
+    ${mediaPromptSafetyInstruction()}
 
     请严格按照系统规范生成${cfg.promptEnd}。
   `;
@@ -98,6 +100,9 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
   const assetData = await u.db("o_assets").where("id", id).select("describe", "assetsId").first();
   const assetDescribe = requestDescribe ?? assetData?.describe ?? "";
   const derivative = Boolean(assetData?.assetsId);
+  const parentAssetData = derivative
+    ? await u.db("o_assets").where("id", assetData?.assetsId).select("name", "describe", "prompt").first()
+    : null;
 
   // 2. 创建图片占位记录
   const [imageId] = await u.db("o_image").insert({
@@ -109,7 +114,8 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
 
   // 3. 准备生成参数
   const imagePath = `/${projectId}/${cfg.dir}/${uuidv4()}.jpg`;
-  const userPrompt = buildPrompt(cfg, type as AssetType, project.artStyle!, name, assetDescribe, prompt, derivative);
+  const promptContext = [prompt, parentAssetData?.prompt, parentAssetData?.describe].filter(Boolean).join("\n");
+  const userPrompt = buildPrompt(cfg, type as AssetType, project.artStyle!, name, assetDescribe, promptContext, derivative);
   const describe = `生成${cfg.label}图，名称：${name}，描述：${assetDescribe || "无详细描述"}，提示词：${prompt}`;
   const relatedObjects = { id, projectId, type: cfg.label };
 

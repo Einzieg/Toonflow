@@ -5,7 +5,18 @@ import u from "@/utils";
 import { buildStoryboardImagePrompt } from "@/utils/assetsPrompt";
 import { getReferenceImageBudget } from "@/utils/vm";
 import { REMOTE_VIDEO_URL_TTL_MS, getPublicOssFileUrl, getRenderableVideoSrc, normalizeVideoState } from "@/utils/videoSource";
-import { resolveVideoGenerationDuration } from "@/utils/storyboardTrack";
+import { resolveVideoGenerationDuration, shouldUsePublicImageReferenceForVideoModel } from "@/utils/storyboardTrack";
+import { minShotCount, resolveMaxShotDurationSeconds, type ShotPolicyContext } from "@/utils/shotPolicy";
+import { mediaPromptSafetyInstruction } from "@/utils/promptSafety";
+import {
+  DEFAULT_STORYBOARD_VIDEO_FORBIDDEN_ADDITIONS,
+  createStoryboardVideoReference,
+  fitStoryboardVideoReferenceDuration,
+  renderStoryboardVideoReferencePrompt,
+  validateStoryboardVideoReferenceResult,
+  type ShotFrameSource,
+  type StoryboardVideoReferenceResult,
+} from "@/utils/storyboardVideoReference";
 import {
   cleanupStoryboardFirstByProjectScript,
   cleanupStoryboardFirstImagesByIds,
@@ -106,6 +117,13 @@ function recommendedSegmentCount(targetDuration: number) {
   return Math.max(3, Math.ceil(targetDuration / 4));
 }
 
+function buildStoryboardFirstShotPolicyContext(project?: Pick<ProjectContext, "videoModel"> | null, modelDetail?: any): ShotPolicyContext {
+  return {
+    videoModel: project?.videoModel || modelDetail?.modelName || "",
+    videoModelName: modelDetail?.name || modelDetail?.modelName || null,
+  };
+}
+
 function getShotScriptHeadings(shotScript: string) {
   return shotScript.split(/\n+/).filter((line) => /^#{2,3}\s*镜头\s*\d+/i.test(line.trim()));
 }
@@ -117,24 +135,29 @@ function extractShotDurations(shotScript: string) {
     .filter((value) => Number.isFinite(value) && value > 0);
 }
 
-function findShotScriptPolicyViolations(shotScript: string, targetDuration: number) {
+function findShotScriptPolicyViolations(shotScript: string, targetDuration: number, policyContext?: ShotPolicyContext | null) {
   const headings = getShotScriptHeadings(shotScript);
-  const minShots = Math.max(1, Math.ceil(targetDuration / 5));
+  const maxShotDuration = resolveMaxShotDurationSeconds(policyContext);
+  const minShots = minShotCount(targetDuration, policyContext);
   const violations: string[] = [];
   if (headings.length < minShots) violations.push(`镜头数量 ${headings.length} 少于最低要求 ${minShots}`);
   if (Math.abs(targetDuration - 10) < 0.01 && headings.length < 3) violations.push("10 秒故事板至少需要 3 个镜头");
-  const tooLong = extractShotDurations(shotScript).find((duration) => duration > 5);
-  if (tooLong) violations.push(`存在 ${tooLong}s 镜头，超过单镜头 5s 上限`);
+  const tooLong = extractShotDurations(shotScript).find((duration) => duration > maxShotDuration);
+  if (tooLong) violations.push(`存在 ${tooLong}s 镜头，超过单镜头 ${maxShotDuration}s 上限`);
   return violations;
 }
 
-function buildShotPolicyLines(targetDuration: number) {
-  const minShots = Math.max(1, Math.ceil(targetDuration / 5));
+function buildShotPolicyLines(targetDuration: number, policyContext?: ShotPolicyContext | null) {
+  const maxShotDuration = resolveMaxShotDurationSeconds(policyContext);
+  const minShots = minShotCount(targetDuration, policyContext);
   const recommended = recommendedSegmentCount(targetDuration);
   const lines = [
-    "单个镜头时长不得超过 5 秒；超过 5 秒的连续动作必须拆成多个镜头。",
+    `单个镜头时长不得超过 ${maxShotDuration} 秒；超过 ${maxShotDuration} 秒的连续动作必须拆成多个镜头。`,
     `本次目标总时长 ${targetDuration}s，最低 ${minShots} 个镜头，建议 ${recommended} 个镜头。`,
   ];
+  if (maxShotDuration > 5) {
+    lines.push(`当前视频模型允许单镜校验上限放宽到 ${maxShotDuration}s，但仍需在动作、情绪、台词或场景转折处主动拆镜，不能为了贴近上限强行合并。`);
+  }
   if (Math.abs(targetDuration - 6) < 0.01) lines.push("6 秒视频建议 2-3 个镜头。");
   if (Math.abs(targetDuration - 10) < 0.01) lines.push("10 秒视频必须 3-5 个镜头，推荐 4 个镜头。");
   if (Math.abs(targetDuration - 15) < 0.01) lines.push("15 秒视频建议 4-6 个镜头。");
@@ -252,10 +275,11 @@ function buildImagePrompt(shotScript: string, project: ProjectContext, targetDur
     "每个小画面框必须符合项目当前画风，角色、服装、场景、道具、光影和材质不能漂移。",
     "参考图只用于锁定角色、服装、场景和道具，不要把参考图直接拼贴进故事板页。",
     "镜头拆分硬约束：",
-    ...buildShotPolicyLines(targetDuration).map((line) => `- ${line}`),
+    ...buildShotPolicyLines(targetDuration, buildStoryboardFirstShotPolicyContext(project)).map((line) => `- ${line}`),
     "故事板页上的字段标签和画面动作说明优先使用简短英文，便于 Grok 视频模型理解。",
     "中文台词只允许作为制作备注出现，必须标注为 Chinese Mandarin VO / dialogue note；不要把台词画成画面内字幕。",
     "小画面框内禁止出现任何字幕、caption、burned-in text、对话气泡、Logo、水印或二维码。",
+    mediaPromptSafetyInstruction(),
     "",
     "项目信息：",
     `项目名：${project.name || "未命名"}`,
@@ -310,10 +334,11 @@ function buildScriptPrompt(input: {
     "- 故事板画面：",
     "",
     "硬性约束：",
-    ...buildShotPolicyLines(input.targetDuration).map((line) => `- ${line}`),
+    ...buildShotPolicyLines(input.targetDuration, buildStoryboardFirstShotPolicyContext(input.project)).map((line) => `- ${line}`),
     "- 从剧本直接拆解镜头，不引用已有分镜图，不假设已有分镜面板。",
     "- 镜头数量由剧情节奏自动判断，但必须覆盖完整动作和台词节奏。",
     "- 台词默认中文；没有台词写“无台词”。",
+    `- ${mediaPromptSafetyInstruction().replace(/\n/g, " ")}`,
     "- 只输出分镜头脚本，不要输出解释、寒暄、JSON 或代码块。",
   ]
     .filter(Boolean)
@@ -345,7 +370,7 @@ async function createShotScript(input: {
     const shotScript = truncateText(stripCodeFence(String(text || "").trim()), MAX_SHOT_SCRIPT_LENGTH);
     if (!shotScript) throw new Error("分镜脚本生成失败：模型返回空内容");
     lastScript = shotScript;
-    previousViolations = findShotScriptPolicyViolations(shotScript, input.targetDuration);
+    previousViolations = findShotScriptPolicyViolations(shotScript, input.targetDuration, buildStoryboardFirstShotPolicyContext(input.project));
     if (!previousViolations.length) return shotScript;
   }
   console.warn("[storyboardFirst.script] 分镜脚本未完全满足时长策略:", previousViolations.join("；"));
@@ -386,6 +411,189 @@ async function buildImageReferences(assets: Array<{ filePath?: string | null }>)
   return references.filter((item): item is { type: "image"; base64: string } => item != null);
 }
 
+function parseShotScriptSections(shotScript: string, fallbackDuration: number) {
+  const lines = String(shotScript || "").split(/\r?\n/);
+  const sections: Array<{ shotNo: number; duration: number; text: string }> = [];
+  let current: { shotNo: number; duration: number; lines: string[] } | null = null;
+  const flush = () => {
+    if (!current) return;
+    sections.push({
+      shotNo: current.shotNo,
+      duration: current.duration,
+      text: current.lines.join("\n").trim(),
+    });
+  };
+
+  for (const line of lines) {
+    const heading = line.match(/^#{2,3}\s*镜头\s*(\d+)(?:.*?(\d+(?:\.\d+)?)\s*(?:s|秒))?/i);
+    if (heading) {
+      flush();
+      current = {
+        shotNo: Number(heading[1]),
+        duration: Number(heading[2]) || 0,
+        lines: [line],
+      };
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  flush();
+
+  if (!sections.length) {
+    return [
+      {
+        shotNo: 1,
+        duration: fallbackDuration,
+        text: shotScript,
+      },
+    ];
+  }
+
+  const missingDuration = sections.some((item) => !Number.isFinite(item.duration) || item.duration <= 0);
+  if (missingDuration) {
+    const average = fallbackDuration / sections.length;
+    return sections.map((item, index) => ({
+      ...item,
+      duration: Number.isFinite(item.duration) && item.duration > 0
+        ? item.duration
+        : Number((index === sections.length - 1 ? fallbackDuration - average * (sections.length - 1) : average).toFixed(3)),
+    }));
+  }
+  return sections;
+}
+
+function extractShotScriptLine(sectionText: string, label: string) {
+  const match = sectionText.match(new RegExp(`-\\s*${label}：([^\\n]+)`));
+  return normalizeText(match?.[1] || "");
+}
+
+function buildVisualOnlyFramePrompt(sectionText: string, project: ProjectContext) {
+  return buildStoryboardImagePrompt(
+    [
+      "Generate one vertical visual-only cinematic key frame for this storyboard shot.",
+      "No text, no subtitles, no captions, no title card, no labels, no UI, no speech bubbles, no watermark.",
+      "Do not draw a storyboard page, panel border, shot label, duration label, or production note.",
+      mediaPromptSafetyInstruction(),
+      `Project art style ID: ${project.artStyle || "unspecified"}. Keep exactly this project style.`,
+      `Director manual: ${truncateText(normalizeText(project.directorManual), 500) || "unspecified"}.`,
+      "Use the shot script below only as visual direction:",
+      truncateText(sectionText, 1200),
+    ].join("\n"),
+    project.artStyle,
+  );
+}
+
+async function generateStoryboardFirstVideoReference(input: {
+  imageRow: any;
+  firstScript: any;
+  modelDetail?: any;
+  targetDuration?: number;
+}): Promise<StoryboardVideoReferenceResult> {
+  if (input.imageRow.videoReferencePath && input.imageRow.frameManifest) {
+    const frameManifest = JSON.parse(input.imageRow.frameManifest || "[]");
+    let cursor = 0;
+    const shotTimeline = parseShotScriptSections(input.firstScript.shotScript || "", Number(input.firstScript.targetDuration || 10)).map((section) => {
+      const start = Number(cursor.toFixed(3));
+      const end = Number((cursor + section.duration).toFixed(3));
+      cursor = end;
+      return {
+        shotNo: section.shotNo,
+        start,
+        end,
+        duration: section.duration,
+        visualObjective: extractShotScriptLine(section.text, "画面内容") || section.text,
+        actionUnit: extractShotScriptLine(section.text, "角色调度") || extractShotScriptLine(section.text, "画面内容") || section.text,
+        cameraMove: extractShotScriptLine(section.text, "运镜") || "按参考帧执行",
+        shotSize: extractShotScriptLine(section.text, "景别") || "按参考帧执行",
+        emotion: extractShotScriptLine(section.text, "声音/情绪") || "按参考帧执行",
+        dialogue: extractShotScriptLine(section.text, "台词/配音") || "无台词",
+      };
+    });
+    return fitStoryboardVideoReferenceDuration(
+      {
+        mode: input.imageRow.videoReferenceMode || "singleComposite",
+        videoReferencePath: input.imageRow.videoReferencePath,
+        referencePaths: [input.imageRow.videoReferencePath],
+        frameManifest,
+        shotTimeline,
+        lockedNarrative: {
+          allowedCharacters: [],
+          allowedScenes: [],
+          allowedProps: [],
+          requiredBeats: shotTimeline.map((item) => item.visualObjective),
+          forbiddenAdditions: DEFAULT_STORYBOARD_VIDEO_FORBIDDEN_ADDITIONS,
+        },
+      },
+      Number(input.targetDuration || input.firstScript.targetDuration || 0),
+    );
+  }
+
+  const project = await getProjectContext(Number(input.imageRow.projectId));
+  const assets = JSON.parse(input.imageRow.referenceSnapshot || "[]");
+  const referenceList = await buildImageReferences(assets);
+  const sections = parseShotScriptSections(input.firstScript.shotScript || "", Number(input.firstScript.targetDuration || 10));
+  const frames: ShotFrameSource[] = [];
+
+  for (const section of sections) {
+    const framePath = `/${input.imageRow.projectId}/storyboardFirst/videoReferenceFrames/${uuidv4()}.jpg`;
+    const framePrompt = buildVisualOnlyFramePrompt(section.text, project);
+    const frameImage = await u.Ai.Image(input.imageRow.imageModel as `${string}:${string}`).run(
+      {
+        prompt: framePrompt,
+        referenceList,
+        size: (input.imageRow.imageQuality || "2K") as "1K" | "2K" | "4K",
+        aspectRatio: STORYBOARD_FIRST_ASPECT_RATIO,
+      },
+      {
+        projectId: Number(input.imageRow.projectId),
+        taskClass: "生成故事板先行视频参考帧",
+        describe: "根据故事板先行分镜脚本生成无文字视频参考帧",
+        relatedObjects: JSON.stringify({
+          projectId: input.imageRow.projectId,
+          scriptId: input.imageRow.scriptId,
+          firstScriptId: input.imageRow.firstScriptId,
+          firstImageId: input.imageRow.id,
+          shotNo: section.shotNo,
+          sourceType: "storyboardFirstVideoReference",
+        }),
+      },
+    );
+    await frameImage.save(framePath);
+    frames.push({
+      shotNo: section.shotNo,
+      filePath: framePath,
+      duration: section.duration,
+      visualObjective: extractShotScriptLine(section.text, "画面内容") || section.text,
+      actionUnit: extractShotScriptLine(section.text, "角色调度") || extractShotScriptLine(section.text, "画面内容") || section.text,
+      cameraMove: extractShotScriptLine(section.text, "运镜") || "按参考帧执行",
+      shotSize: extractShotScriptLine(section.text, "景别") || "按参考帧执行",
+      emotion: extractShotScriptLine(section.text, "声音/情绪") || "按参考帧执行",
+      dialogue: extractShotScriptLine(section.text, "台词/配音") || "无台词",
+      scene: "",
+      characters: [],
+      props: [],
+      owned: true,
+    });
+  }
+
+  const result = fitStoryboardVideoReferenceDuration(
+    await createStoryboardVideoReference({
+      projectId: Number(input.imageRow.projectId),
+      frames,
+      modelDetail: input.modelDetail,
+      requestedMode: "auto",
+    }),
+    Number(input.targetDuration || input.firstScript.targetDuration || 0),
+  );
+  await u.db("o_storyboardFirstImage").where("id", input.imageRow.id).update({
+    videoReferencePath: result.videoReferencePath,
+    videoReferenceMode: result.mode,
+    frameManifest: JSON.stringify(result.frameManifest),
+    updateTime: Date.now(),
+  });
+  return result;
+}
+
 async function saveImageThumbnail(filePath: string, thumbPath: string) {
   const imageBuffer = await u.oss.getFile(filePath);
   const thumbBuffer = await sharp(imageBuffer).resize(720, 720, { fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
@@ -407,14 +615,11 @@ async function getVideoModelDetail(model: string) {
   return detail;
 }
 
-function getSupportedDurations(detail: any) {
-  const durations = new Set<number>();
-  if (Array.isArray(detail?.durationResolutionMap)) {
-    detail.durationResolutionMap.forEach((item: any) => {
-      if (Array.isArray(item.duration)) item.duration.forEach((duration: any) => Number.isFinite(Number(duration)) && durations.add(Number(duration)));
-    });
-  }
-  return Array.from(durations);
+function durationMatchesMap(itemDurations: number[], duration: number) {
+  if (!itemDurations.length) return true;
+  const values = itemDurations.filter((value) => Number.isFinite(value) && value > 0);
+  if (!values.length) return true;
+  return duration >= Math.min(...values) && duration <= Math.max(...values);
 }
 
 function getSupportedResolutions(detail: any, duration: number) {
@@ -422,7 +627,7 @@ function getSupportedResolutions(detail: any, duration: number) {
   if (Array.isArray(detail?.durationResolutionMap)) {
     detail.durationResolutionMap.forEach((item: any) => {
       const itemDurations = Array.isArray(item.duration) ? item.duration.map((value: any) => Number(value)) : [];
-      if (!itemDurations.length || itemDurations.includes(duration)) {
+      if (durationMatchesMap(itemDurations, duration)) {
         (Array.isArray(item.resolution) ? item.resolution : []).forEach((resolution: any) => resolution && resolutions.add(String(resolution)));
       }
     });
@@ -443,15 +648,15 @@ function resolveVideoResolution(detail: any, duration: number, requested: string
 }
 
 function shouldUsePublicImageReference(model: string) {
-  const [vendorId] = String(model || "").split(/:(.+)/);
-  return vendorId === "cliproxyapi";
+  return shouldUsePublicImageReferenceForVideoModel(model);
 }
 
 function isGrokModel(model: string) {
   return model.toLowerCase().includes("grok");
 }
 
-export function buildStoryboardFirstVideoPrompt(shotScript: string, model: string, targetDuration: number) {
+export function buildStoryboardFirstVideoPrompt(shotScript: string, model: string, targetDuration: number, policyContext?: ShotPolicyContext | null) {
+  const resolvedPolicyContext = policyContext || { videoModel: model };
   if (isGrokModel(model)) {
     const prompt = [
       "Use the single vertical storyboard image as the only visual reference for generating a continuous video.",
@@ -459,9 +664,10 @@ export function buildStoryboardFirstVideoPrompt(shotScript: string, model: strin
       `Target total duration: ${targetDuration}s.`,
       "Grok supports @image references. Use only the current storyboard image; do not invent extra reference characters or assets.",
       "Timing rules:",
-      ...buildShotPolicyLines(targetDuration).map((line) => `- ${line}`),
+      ...buildShotPolicyLines(targetDuration, resolvedPolicyContext).map((line) => `- ${line}`),
       "Audio rule: all spoken dialogue, voiceover, and character dubbing must be in Chinese Mandarin.",
       "Visual text rule: no subtitles, no captions, no burned-in text, no speech bubbles, no title cards, and no readable text in the video frame.",
+      mediaPromptSafetyInstruction(),
       "If the storyboard image contains text notes, treat them only as production notes, not as on-screen text to render.",
       "Keep the established project art style, character identity, wardrobe, scene relationship, and camera continuity.",
       "",
@@ -476,9 +682,10 @@ export function buildStoryboardFirstVideoPrompt(shotScript: string, model: strin
     "这张图是导演故事板页，包含按顺序排列的多个镜头卡片；请按镜头编号顺序推进剧情、动作、调度和台词，不要把它当成单帧剧照。",
     `目标总时长：${targetDuration}s。`,
     "镜头节奏硬约束：",
-    ...buildShotPolicyLines(targetDuration).map((line) => `- ${line}`),
+    ...buildShotPolicyLines(targetDuration, resolvedPolicyContext).map((line) => `- ${line}`),
     "配音、旁白和角色台词必须使用中文普通话；没有台词的镜头不要生成口型。",
     "画面中禁止出现字幕、caption、硬字幕、对话气泡、标题卡或任何可读文字。",
+    mediaPromptSafetyInstruction(),
     "故事板图上的文字只作为制作备注理解，不要渲染成视频画面文字。",
     "保持项目既定画风、角色身份、服装、场景关系和镜头连续性。",
     "",
@@ -625,13 +832,14 @@ async function runVideoJob(firstVideoId: number, jobToken: string, req?: any) {
   if (!videoRow) return;
   const image = await u.db("o_storyboardFirstImage").where("id", videoRow.firstImageId).first();
   if (!image?.filePath) return;
+  const referencePath = image.videoReferencePath || image.filePath;
   const videoPath = `/${videoRow.projectId}/video/${uuidv4()}.mp4`;
   try {
     const model = String(videoRow.model || "");
     const aiVideo = u.Ai.Video(model as `${string}:${string}`);
     const referenceImage = shouldUsePublicImageReference(model)
-      ? await getPublicOssFileUrl(image.filePath, req)
-      : await u.oss.getImageBase64(image.filePath);
+      ? await getPublicOssFileUrl(referencePath, req)
+      : await u.oss.getImageBase64(referencePath);
     await aiVideo.run(
       {
         prompt: videoRow.prompt || "",
@@ -806,6 +1014,8 @@ export async function getStoryboardFirstState(projectId: number, scriptId: numbe
           thumbUrl,
           version: image.version,
           imageSourceHash: image.imageSourceHash || "",
+          videoReferencePath: image.videoReferencePath || "",
+          videoReferenceMode: image.videoReferenceMode || "",
           stale: imageStale,
           state: image.state,
           errorReason: image.errorReason || "",
@@ -992,15 +1202,26 @@ export async function startGenerateStoryboardFirstVideo(input: {
   if (stale) throw new Error("故事板图片已过期，请先重新生成故事板图片");
 
   const detail = await getVideoModelDetail(input.model);
-  const effectiveDuration = resolveVideoGenerationDuration(input.model, input.duration, detail.name);
-  const supportedDurations = getSupportedDurations(detail);
-  if (supportedDurations.length && !supportedDurations.includes(effectiveDuration)) {
-    throw new Error(`当前模型不支持 ${effectiveDuration}s 时长，可用时长：${supportedDurations.join(", ")}s`);
-  }
+  const effectiveDuration = resolveVideoGenerationDuration(input.model, input.duration, detail.name, detail.durationResolutionMap);
+  const policyContext: ShotPolicyContext = {
+    videoModel: input.model,
+    videoModelName: detail.name || detail.modelName || null,
+  };
   const resolution = resolveVideoResolution(detail, effectiveDuration, input.resolution);
   if (input.audio && detail.audio === false) throw new Error("当前模型不支持生成音频");
 
-  const prompt = buildStoryboardFirstVideoPrompt(firstScript.shotScript || "", input.model, effectiveDuration);
+  const videoReference = await generateStoryboardFirstVideoReference({
+    imageRow: image,
+    firstScript,
+    modelDetail: detail,
+    targetDuration: effectiveDuration,
+  });
+  const referenceViolations = validateStoryboardVideoReferenceResult(videoReference, effectiveDuration, policyContext);
+  if (referenceViolations.length) {
+    throw new Error(`视频参考图预检失败：${referenceViolations.join("；")}`);
+  }
+
+  const prompt = renderStoryboardVideoReferencePrompt(videoReference, effectiveDuration);
   const result = await u.db.transaction(async (trx: any) => {
     const running = await trx("o_storyboardFirstVideo").where({ firstImageId: input.firstImageId, state: "生成中" }).orderBy("createTime", "desc").first();
     if (running) return { id: running.id, videoId: running.videoId, reused: true, jobToken: "" };

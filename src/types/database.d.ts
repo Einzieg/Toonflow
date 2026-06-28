@@ -59,6 +59,9 @@ export interface o_assets {
   'startTime'?: number | null;
   'type'?: string | null;
   'volcengineAssetUri'?: string | null;
+  'voiceProfile'?: string | null;
+  'voiceTone'?: string | null;
+  'speechRate'?: string | null;
 }
 export interface o_assets2Storyboard {
   'assetId'?: number;
@@ -183,6 +186,11 @@ export interface o_storyboard {
   'duration'?: string | null;
   'filePath'?: string | null;
   'flowId'?: number | null;
+  'gridImageFlowId'?: number | null;
+  'gridImagePath'?: string | null;
+  'gridImagePrompt'?: string | null;
+  'gridImageReason'?: string | null;
+  'gridImageState'?: string | null;
   'id'?: number;
   'index'?: number | null;
   'projectId'?: number | null;
@@ -190,6 +198,7 @@ export interface o_storyboard {
   'reason'?: string | null;
   'scriptId'?: number | null;
   'shouldGenerateImage'?: number | null;
+  'shotMeta'?: string | null;
   'state'?: string | null;
   'track'?: string | null;
   'trackId'?: number | null;
@@ -200,15 +209,18 @@ export interface o_storyboardBoard {
   'endIndex'?: number | null;
   'errorReason'?: string | null;
   'filePath'?: string | null;
+  'frameManifest'?: string | null;
   'id'?: number;
   'imageModel'?: string | null;
   'imagePrompt'?: string | null;
   'itemsPerBoard'?: number | null;
   'labelMode'?: string | null;
   'layout'?: string | null;
+  'lockedNarrative'?: string | null;
   'projectId'?: number | null;
   'ratio'?: string | null;
   'scriptId'?: number | null;
+  'shotTimeline'?: string | null;
   'sourceHash'?: string | null;
   'sourceType'?: string | null;
   'startIndex'?: number | null;
@@ -218,6 +230,8 @@ export interface o_storyboardBoard {
   'targetDuration'?: number | null;
   'thumbPath'?: string | null;
   'updateTime'?: number | null;
+  'videoReferenceMode'?: string | null;
+  'videoReferencePath'?: string | null;
 }
 export interface o_storyboardBoardVideo {
   'boardId'?: number | null;
@@ -264,6 +278,7 @@ export interface o_storyboardFirstImage {
   'errorReason'?: string | null;
   'filePath'?: string | null;
   'firstScriptId'?: number | null;
+  'frameManifest'?: string | null;
   'id'?: number;
   'imageModel'?: string | null;
   'imagePrompt'?: string | null;
@@ -282,6 +297,8 @@ export interface o_storyboardFirstImage {
   'state'?: string | null;
   'thumbPath'?: string | null;
   'updateTime'?: number | null;
+  'videoReferenceMode'?: string | null;
+  'videoReferencePath'?: string | null;
   'version'?: number | null;
 }
 export interface o_storyboardFirstVideo {
@@ -334,6 +351,7 @@ export interface o_video {
   'id'?: number;
   'localSaveErrorReason'?: string | null;
   'localSaveState'?: string | null;
+  'prompt'?: string | null;
   'projectId'?: number | null;
   'remoteUrl'?: string | null;
   'remoteUrlExpireTime'?: number | null;
@@ -347,11 +365,23 @@ export interface o_videoTrack {
   'id'?: number;
   'projectId'?: number | null;
   'prompt'?: string | null;
+  'referenceMediaOverride'?: string | null;
   'reason'?: string | null;
   'scriptId'?: number | null;
   'selectVideoId'?: number | null;
   'state'?: string | null;
   'videoId'?: number | null;
+}
+export interface o_videoTrackMergeSnapshot {
+  'createTime'?: number | null;
+  'id'?: number;
+  'projectId'?: number | null;
+  'scriptId'?: number | null;
+  'sourceTrackId'?: number | null;
+  'storyboards'?: string | null;
+  'targetTrackId'?: number | null;
+  'trackData'?: string | null;
+  'videoIds'?: string | null;
 }
 
 export interface DB {
@@ -388,4 +418,5 @@ export interface DB {
   "o_vendorConfig": o_vendorConfig;
   "o_video": o_video;
   "o_videoTrack": o_videoTrack;
+  "o_videoTrackMergeSnapshot": o_videoTrackMergeSnapshot;
 }

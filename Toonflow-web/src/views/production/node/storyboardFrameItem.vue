@@ -1,5 +1,5 @@
 <template>
-  <div ref="frameRef" class="storyboardFrameItem" @mouseenter="hovered = true" @mouseleave="hovered = false">
+  <div ref="frameRef" class="storyboardFrameItem" :class="{ selected, selectable }" @mouseenter="hovered = true" @mouseleave="hovered = false">
     <button type="button" class="addBetween addBetween--left" :aria-label="`${frameLabel}-left`" @click.stop="$emit('insert-left')">
       <i-plus />
     </button>
@@ -13,6 +13,16 @@
         }">
         <div class="frameTypeTag" :style="{ backgroundColor: tagColor, transform: `scale(${styleMaxSize})` }">
           {{ frameLabel }}
+        </div>
+        <t-checkbox
+          v-if="selectable"
+          class="selectCheck"
+          :checked="selected"
+          :style="{ transform: `scale(${styleMaxSize})` }"
+          @click.stop
+          @change="(value: boolean) => $emit('toggle-selected', value)" />
+        <div v-if="timingBadge" class="timingBadge" :style="{ transform: `scale(${styleMaxSize})` }">
+          {{ timingBadge }}
         </div>
 
         <template v-if="showImage">
@@ -30,6 +40,10 @@
             <span>{{ frameLabel }}</span>
           </div>
         </template>
+
+        <div v-else-if="isImageSkipped" class="skippedPlaceholder" @click="$emit('open')">
+          <span>不生成图片</span>
+        </div>
 
         <div v-else class="generatingPlaceholder" @click="$emit('open')">
           <t-loading v-if="item.state === '生成中'" size="small" />
@@ -83,6 +97,8 @@ const props = defineProps<{
   styleMaxSize: number;
   tagColor: string;
   displaySrc: string;
+  selectable?: boolean;
+  selected?: boolean;
 }>();
 
 defineEmits<{
@@ -91,15 +107,27 @@ defineEmits<{
   (e: "open"): void;
   (e: "remove"): void;
   (e: "edit-info"): void;
+  (e: "toggle-selected", selected: boolean): void;
 }>();
 
 const hovered = ref(false);
 const frameRef = ref<HTMLElement | null>(null);
 const hasIntersected = ref(false);
 
-const showImage = computed(() => Boolean(props.item.src && props.item.state === "已完成"));
+const isImageSkipped = computed(() => Number(props.item.shouldGenerateImage) === 0);
+const showImage = computed(() => !isImageSkipped.value && Boolean(props.item.src && props.item.state === "已完成"));
 const frameLabel = computed(() => `S${String(props.index + 1).padStart(2, "0")}`);
 const shouldMountMedia = computed(() => !showImage.value || hasIntersected.value || hovered.value);
+const timingBadge = computed(() => {
+  const meta = props.item.shotMeta;
+  if (!meta) return "";
+  const parts = [
+    props.item.duration != null ? `${props.item.duration}s` : "",
+    meta.dialogueCharCount != null ? `${meta.dialogueCharCount}字` : "",
+    meta.estimatedSpeechRate || "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+});
 
 useIntersectionObserver(
   frameRef,
@@ -150,8 +178,14 @@ useIntersectionObserver(
   contain: layout style;
 }
 
+.storyboardFrameItem.selected .frameImage {
+  outline: 3px solid var(--td-brand-color, #0052d9);
+  outline-offset: 2px;
+}
+
 .frameImg,
 .deferredPlaceholder,
+.skippedPlaceholder,
 .generatingPlaceholder {
   width: 100%;
   height: 100%;
@@ -163,6 +197,7 @@ useIntersectionObserver(
 }
 
 .deferredPlaceholder,
+.skippedPlaceholder,
 .generatingPlaceholder {
   display: flex;
   align-items: center;
@@ -184,6 +219,14 @@ useIntersectionObserver(
   font-size: 12px;
 }
 
+.skippedPlaceholder {
+  color: var(--td-text-color-placeholder, #999);
+  font-size: 12px;
+  background:
+    repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.04) 0 8px, transparent 8px 16px),
+    var(--td-bg-color-container-hover, #f5f5f5);
+}
+
 .frameTypeTag {
   position: absolute;
   left: 6px;
@@ -196,6 +239,43 @@ useIntersectionObserver(
   line-height: 18px;
   border-radius: 3px;
   transform-origin: top left;
+}
+
+.selectable .frameTypeTag {
+  left: 34px;
+}
+
+.selectCheck {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  z-index: 5;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.84);
+  transform-origin: top left;
+}
+
+.timingBadge {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 2;
+  max-width: calc(100% - 12px);
+  padding: 0 6px;
+  line-height: 18px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.58);
+  transform-origin: bottom left;
+  pointer-events: none;
 }
 
 .addBetween {

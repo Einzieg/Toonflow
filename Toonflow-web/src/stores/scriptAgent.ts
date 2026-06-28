@@ -61,6 +61,26 @@ function makeScriptAgentStore(projectId: string) {
               s.on("getPlanData", (_, callback) => {
                 callback(planData.value);
               });
+              s.on("setStorySkeleton", (data, callback) => {
+                planData.value.storySkeleton = data?.content ?? "";
+                callback?.({ success: true, message: `已刷新故事骨架 ${planData.value.storySkeleton.length} 字` });
+              });
+              s.on("setAdaptationStrategy", (data, callback) => {
+                planData.value.adaptationStrategy = data?.content ?? "";
+                callback?.({ success: true, message: `已刷新改编策略 ${planData.value.adaptationStrategy.length} 字` });
+              });
+              s.on("setScriptItems", (data, callback) => {
+                const items = Array.isArray(data?.items) ? data.items : [];
+                for (const item of items) {
+                  const existingIndex = planData.value.script.findIndex((script) => script.id === item.id || script.name === item.name);
+                  if (existingIndex !== -1) {
+                    planData.value.script[existingIndex] = item;
+                  } else {
+                    planData.value.script.push(item);
+                  }
+                }
+                callback?.({ success: true, message: `已刷新剧本 ${items.length} 条` });
+              });
             }
           },
           { immediate: true },

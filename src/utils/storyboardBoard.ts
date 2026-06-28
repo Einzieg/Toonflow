@@ -3,8 +3,10 @@ import sharp from "sharp";
 import u from "@/utils";
 import { buildStoryboardImagePrompt } from "@/utils/assetsPrompt";
 import { resolveEffectiveStoryboardAssetReferences, type EffectiveAssetReference } from "@/utils/effectiveAssetReference";
-import { getGrokVideoSupportedDurations, normalizeStoryboardDuration } from "@/utils/storyboardTrack";
+import { formatVideoDurationRange, normalizeStoryboardDuration, resolveVideoModelDurationRange } from "@/utils/storyboardTrack";
+import { resolveMaxShotDurationSeconds, type ShotPolicyContext } from "@/utils/shotPolicy";
 import { getReferenceImageBudget, urlToCompressedBase64 } from "@/utils/vm";
+import { mediaPromptSafetyInstruction } from "@/utils/promptSafety";
 
 export type StoryboardBoardLayout = "script" | "grid" | "vertical" | "horizontal";
 export type StoryboardBoardRatio = "auto" | "16:9" | "9:16";
@@ -31,6 +33,7 @@ export interface StoryboardBoardContext {
   imageModel: string;
   imageQuality?: "1K" | "2K" | "4K" | null;
   videoRatio?: "16:9" | "9:16" | null;
+  videoModel?: string | null;
   ratio?: StoryboardBoardRatio;
   itemsPerBoard?: number | null;
   targetDuration?: number | null;
@@ -58,9 +61,10 @@ const MAX_IMAGE_PROMPT_LENGTH = 3800;
 const MAX_VIDEO_PROMPT_BYTES = 3000;
 const MAX_STORYBOARDS_PER_BOARD = 8;
 const MAX_STORYBOARD_BOARD_REFERENCES = 7;
-const MAX_STORYBOARD_BOARD_SHOT_DURATION = 5;
 const TEN_SECOND_STORYBOARD_MIN_SHOTS = 3;
 const TEN_SECOND_STORYBOARD_MAX_SHOTS = 5;
+const FIFTEEN_SECOND_STORYBOARD_MIN_SHOTS = 4;
+const FIFTEEN_SECOND_STORYBOARD_MAX_SHOTS = 6;
 
 function normalizeText(value?: string | number | null) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -151,30 +155,52 @@ function normalizeTargetDuration(storyboards: StoryboardBoardInput[], targetDura
   return Number(Math.max(1, total || 6).toFixed(3));
 }
 
-function resolveStoryboardShotPolicy(totalDuration: number) {
-  const duration = Number.isFinite(totalDuration) && totalDuration > 0 ? totalDuration : 6;
-  const isTenSecondVideo = Math.abs(duration - 10) < 0.01;
-  const minByDuration = Math.max(1, Math.ceil(duration / MAX_STORYBOARD_BOARD_SHOT_DURATION));
-  const minShots = isTenSecondVideo ? Math.max(TEN_SECOND_STORYBOARD_MIN_SHOTS, minByDuration) : minByDuration;
-  const maxShots = isTenSecondVideo ? TEN_SECOND_STORYBOARD_MAX_SHOTS : Math.max(minShots, Math.ceil(duration / 2));
+function buildStoryboardBoardShotPolicyContext(context?: Pick<StoryboardBoardContext, "videoModel"> | null, model?: string | null): ShotPolicyContext {
   return {
-    duration,
-    isTenSecondVideo,
-    minShots,
-    maxShots,
-    maxShotDuration: MAX_STORYBOARD_BOARD_SHOT_DURATION,
+    videoModel: model || context?.videoModel || "",
   };
 }
 
-function buildStoryboardShotPolicyLines(totalDuration: number, options: { includeFormatLine?: boolean } = {}) {
-  const policy = resolveStoryboardShotPolicy(totalDuration);
+function resolveStoryboardShotPolicy(totalDuration: number, policyContext?: ShotPolicyContext | null) {
+  const duration = Number.isFinite(totalDuration) && totalDuration > 0 ? totalDuration : 6;
+  const isTenSecondVideo = Math.abs(duration - 10) < 0.01;
+  const isFifteenSecondVideo = Math.abs(duration - 15) < 0.01;
+  const maxShotDuration = resolveMaxShotDurationSeconds(policyContext);
+  const minByDuration = Math.max(1, Math.ceil(duration / maxShotDuration));
+  const minShots = isTenSecondVideo
+    ? Math.max(TEN_SECOND_STORYBOARD_MIN_SHOTS, minByDuration)
+    : isFifteenSecondVideo
+      ? Math.max(FIFTEEN_SECOND_STORYBOARD_MIN_SHOTS, minByDuration)
+      : minByDuration;
+  const maxShots = isTenSecondVideo
+    ? TEN_SECOND_STORYBOARD_MAX_SHOTS
+    : isFifteenSecondVideo
+      ? FIFTEEN_SECOND_STORYBOARD_MAX_SHOTS
+      : Math.max(minShots, Math.ceil(duration / 2));
+  return {
+    duration,
+    isTenSecondVideo,
+    isFifteenSecondVideo,
+    minShots,
+    maxShots,
+    maxShotDuration,
+  };
+}
+
+function buildStoryboardShotPolicyLines(totalDuration: number, options: { includeFormatLine?: boolean } = {}, policyContext?: ShotPolicyContext | null) {
+  const policy = resolveStoryboardShotPolicy(totalDuration, policyContext);
   const lines = [
     `单个镜头时长不得超过 ${policy.maxShotDuration} 秒；任何超过 ${policy.maxShotDuration} 秒的连续动作必须拆成多个镜头卡片。`,
   ];
   if (policy.isTenSecondVideo) {
     lines.push(`10 秒视频的故事板必须规划 ${policy.minShots}-${policy.maxShots} 张镜头卡片，推荐 4 张；不得只生成 1-2 张镜头。`);
+  } else if (policy.isFifteenSecondVideo) {
+    lines.push(`15 秒视频的故事板建议规划 ${policy.minShots}-${policy.maxShots} 张镜头卡片；不得因为模型支持 15s 就把台词、动作和情绪转折强行合并成单镜。`);
   } else {
     lines.push(`本段至少规划 ${policy.minShots} 张镜头卡片，镜头数量要能覆盖 ${policy.duration}s 的动作节奏。`);
+  }
+  if (policy.maxShotDuration > 5) {
+    lines.push(`当前视频模型允许单镜校验上限放宽到 ${policy.maxShotDuration}s，但仍需在动作、台词、情绪或场景切换处主动拆镜。`);
   }
   if (options.includeFormatLine) {
     lines.push("每个镜头标题必须写明覆盖分镜和时长，格式示例：## 镜头 01 / S01-S02 / 3s。");
@@ -193,8 +219,8 @@ function extractShotScriptHeadingDurations(shotScript: string) {
     .filter((value) => Number.isFinite(value) && value > 0);
 }
 
-function findShotScriptPolicyViolations(shotScript: string, totalDuration: number) {
-  const policy = resolveStoryboardShotPolicy(totalDuration);
+function findShotScriptPolicyViolations(shotScript: string, totalDuration: number, policyContext?: ShotPolicyContext | null) {
+  const policy = resolveStoryboardShotPolicy(totalDuration, policyContext);
   const headings = getShotScriptHeadings(shotScript);
   const durations = extractShotScriptHeadingDurations(shotScript);
   const violations: string[] = [];
@@ -388,7 +414,7 @@ export async function planStoryboardBoardSegments(storyboards: StoryboardBoardIn
 
 export function computeStoryboardBoardSourceHash(storyboards: StoryboardBoardInput[], context: Partial<StoryboardBoardContext> = {}) {
   const payload = {
-    mode: "scriptShotSheet:v5-portraitShotDurationPolicy",
+    mode: "scriptShotSheet:v6-modelAwareShotDurationPolicy",
     projectId: context.projectId,
     scriptId: context.scriptId,
     scriptContent: truncateText(normalizeText(context.scriptContent), MAX_SCRIPT_CONTENT_LENGTH),
@@ -396,6 +422,7 @@ export function computeStoryboardBoardSourceHash(storyboards: StoryboardBoardInp
     artStyle: context.artStyle || "",
     directorManual: context.directorManual || "",
     imageModel: context.imageModel || "",
+    videoModel: context.videoModel || "",
     targetDuration: normalizeTargetDuration(storyboards, context.targetDuration),
     ratio: STORYBOARD_BOARD_FIXED_IMAGE_RATIO,
     itemsPerBoard: context.itemsPerBoard || storyboards.length,
@@ -417,6 +444,7 @@ export async function buildStoryboardShotScript(storyboards: StoryboardBoardInpu
     storyboards.map((item) => Number(item.id)).filter((id) => Number.isInteger(id)),
   );
   const totalDuration = normalizeTargetDuration(storyboards, context.targetDuration);
+  const policyContext = buildStoryboardBoardShotPolicyContext(context);
   const storyboardRows = formatStoryboardRows(storyboards, assetRefs);
   let lastShotScript = "";
   let previousViolations: string[] = [];
@@ -457,10 +485,11 @@ export async function buildStoryboardShotScript(storyboards: StoryboardBoardInpu
         "- 故事板画面：",
         "",
         "约束：",
-        ...buildStoryboardShotPolicyLines(totalDuration, { includeFormatLine: true }).map((line) => `- ${line}`),
+        ...buildStoryboardShotPolicyLines(totalDuration, { includeFormatLine: true }, policyContext).map((line) => `- ${line}`),
         "- 镜头数量应与输入分镜范围匹配，必要时可把一个长分镜拆成多个镜头，也可把相邻极短分镜合并为一个镜头，但必须说明覆盖的 Sxx。",
         "- 总时长必须贴近目标视频总时长，单个镜头时长加总必须等于目标总时长。",
         "- 台词必须输出中文，除非原文明确是其他语言。",
+        `- ${mediaPromptSafetyInstruction().replace(/\n/g, " ")}`,
         "- 不要假设已有分镜图可用；只根据剧本、分镜文本和资产描述规划故事板。",
       ].filter(Boolean).join("\n"),
     });
@@ -468,7 +497,7 @@ export async function buildStoryboardShotScript(storyboards: StoryboardBoardInpu
     const shotScript = stripCodeFence(String(text || "").trim());
     if (!shotScript) throw new Error("分镜头脚本生成失败：模型返回空内容");
     lastShotScript = truncateText(shotScript, MAX_SHOT_SCRIPT_LENGTH);
-    previousViolations = findShotScriptPolicyViolations(lastShotScript, totalDuration);
+    previousViolations = findShotScriptPolicyViolations(lastShotScript, totalDuration, policyContext);
     if (!previousViolations.length) return lastShotScript;
   }
 
@@ -479,6 +508,7 @@ export async function buildStoryboardShotScript(storyboards: StoryboardBoardInpu
 export function buildStoryboardBoardImagePrompt(shotScript: string, context: StoryboardBoardContext) {
   const aspectRatio = resolveAspectRatio();
   const targetDuration = normalizeTargetDuration([], context.targetDuration);
+  const policyContext = buildStoryboardBoardShotPolicyContext(context);
   const basePrompt = [
     "生成一张单页“分镜头脚本 / Storyboard Shot Sheet”图片，不要拼接任何已有分镜图。",
     `画幅比例：${aspectRatio} 竖版。整张图必须是竖向故事板工作页，禁止横版、宽屏、16:9、横向海报或左右横铺版式。`,
@@ -486,13 +516,14 @@ export function buildStoryboardBoardImagePrompt(shotScript: string, context: Sto
     `项目画风ID：${context.artStyle || "未指定"}。画风优先级最高，高于故事板版式和参考图偶发风格。`,
     ...buildStoryboardBoardFrameStyleLines(context.artStyle),
     "镜头拆分硬约束：",
-    ...buildStoryboardShotPolicyLines(targetDuration).map((line) => `- ${line}`),
-    "- 如果分镜头脚本草稿中存在单镜头超过 5 秒，画面中必须拆成多个镜头卡片表现。",
+    ...buildStoryboardShotPolicyLines(targetDuration, {}, policyContext).map((line) => `- ${line}`),
+    `- 如果分镜头脚本草稿中存在单镜头超过 ${resolveMaxShotDurationSeconds(policyContext)} 秒，画面中必须拆成多个镜头卡片表现。`,
     "每个镜头卡片必须包含：符合项目画风的小画面框、SHOT、DURATION、SHOT SIZE、CAMERA MOVE、COMPOSITION、ACTION、CHINESE VOICE NOTE。",
     "画面应像影视导演用于拍摄沟通的故事板页，而不是照片拼贴、九宫格截图、宣传海报或单帧剧照。",
     "故事板页上的字段标签和画面动作说明优先使用简短英文，便于 Grok 视频模型理解。",
     "中文台词只允许作为制作备注出现，必须标注为 Chinese Mandarin VO / dialogue note；不要把台词画成画面内字幕。",
     "小画面框内禁止出现任何字幕、caption、burned-in text、对话气泡、Logo、水印或二维码。",
+    mediaPromptSafetyInstruction(),
     "每个小画面框要表达镜头调度、人物位置、运动方向和情绪重点；不要把所有镜头画成同一个构图。",
     "如果提供了参考图，角色/场景/道具资产图优先用于锁定项目实际画风、角色外观、服装、场景和道具质感；不要把参考图直接拼贴到故事板页中。",
     "如果某张分镜参考图与项目画风不一致，只提取构图、动作和身份信息，不继承其错误画风。",
@@ -551,7 +582,8 @@ export async function generateStoryboardBoardImageFromScript(
   if (!context.imageModel) throw new Error("项目未配置图片生成模型");
   const providedShotScript = String(options.shotScript || "").trim();
   const targetDuration = normalizeTargetDuration(storyboards, context.targetDuration);
-  const shouldReuseShotScript = providedShotScript && !findShotScriptPolicyViolations(providedShotScript, targetDuration).length;
+  const policyContext = buildStoryboardBoardShotPolicyContext(context);
+  const shouldReuseShotScript = providedShotScript && !findShotScriptPolicyViolations(providedShotScript, targetDuration, policyContext).length;
   const shotScript = shouldReuseShotScript ? providedShotScript : await buildStoryboardShotScript(storyboards, context);
   const imagePrompt = buildStoryboardBoardImagePrompt(shotScript, context);
   const aspectRatio = resolveAspectRatio();
@@ -613,17 +645,19 @@ export async function buildStoryboardBoardVideoPrompt(
     })
     .join("\n");
   const isGrok = model.toLowerCase().includes("grok");
-  const grokDurations = getGrokVideoSupportedDurations(model);
-  const durationNote = isGrok ? `Grok 视频只支持 ${grokDurations.join(" 秒、")} 秒，请按最终提交时长压缩节奏。` : "按最终提交时长重算镜头节奏。";
+  const grokDurationRange = resolveVideoModelDurationRange(model);
+  const durationNote = isGrok ? `Grok 视频支持 ${formatVideoDurationRange(grokDurationRange)}，请按最终提交时长压缩或延展节奏。` : "按最终提交时长重算镜头节奏。";
+  const policyContext = buildStoryboardBoardShotPolicyContext(null, model);
   if (isGrok) {
     const prompt = [
       "Use the single storyboard sheet image as the only visual reference for generating a continuous video.",
       "The image is a director shot sheet, not a static collage. Follow the shot numbers, action order, camera movement, staging, emotion, and dialogue timing.",
-      `Target duration: ${targetDuration}s. Grok video supports ${grokDurations.join("s, ")}s only, so compress the pacing to the submitted duration.`,
+      `Target duration: ${targetDuration}s. Grok video supports ${formatVideoDurationRange(grokDurationRange)}; use the submitted duration and preserve the source shot timing as pacing guidance.`,
       "Timing rules:",
-      ...buildStoryboardShotPolicyLines(targetDuration).map((line) => `- ${line}`),
+      ...buildStoryboardShotPolicyLines(targetDuration, {}, policyContext).map((line) => `- ${line}`),
       "Audio rule: all spoken dialogue, voiceover, and character dubbing must be in Chinese Mandarin.",
       "Visual text rule: no subtitles, no captions, no burned-in text, no speech bubbles, no title cards, and no readable text in the video frame.",
+      mediaPromptSafetyInstruction(),
       "If the storyboard image contains text notes, treat them only as production notes, not as on-screen text to render.",
       "Keep the established project art style, character identity, wardrobe, scene relationship, and camera continuity.",
       "",
@@ -639,9 +673,10 @@ export async function buildStoryboardBoardVideoPrompt(
     "这张图是导演分镜头脚本页，不是静态拼贴图；请按镜头编号顺序推进剧情、动作、调度和台词。",
     `目标时长：${targetDuration}s。${durationNote}`,
     "镜头节奏硬约束：",
-    ...buildStoryboardShotPolicyLines(targetDuration).map((line) => `- ${line}`),
+    ...buildStoryboardShotPolicyLines(targetDuration, {}, policyContext).map((line) => `- ${line}`),
     "配音、旁白和角色台词必须使用中文普通话；没有台词的镜头不要生成口型。",
     "画面中禁止出现字幕、caption、硬字幕、对话气泡、标题卡或任何可读文字。",
+    mediaPromptSafetyInstruction(),
     "故事板图上的文字只作为制作备注理解，不要渲染成视频画面文字。",
     "保持项目既定画风、角色身份、服装、场景关系和镜头连续性。",
     "",

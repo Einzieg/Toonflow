@@ -3,6 +3,7 @@ import { success } from "@/lib/responseFormat";
 import u from "@/utils";
 import { z } from "zod";
 import { validateFields } from "@/middleware/middleware";
+import { syncProductionScriptToWorkData } from "@/utils/productionWorkDataSync";
 const router = express.Router();
 
 export default router.post(
@@ -28,8 +29,9 @@ export default router.post(
     await Promise.all(
       script.map(async (s: any) => {
         const row = await u.db("o_script").where({ projectId, name: s.name }).first();
-        if (row) {
+        if (row?.id != null) {
           await u.db("o_script").where({ id: row.id }).update({ content: s.content });
+          await syncProductionScriptToWorkData({ projectId, scriptId: row.id, content: s.content });
         } else {
           await u.db("o_script").insert({ projectId, name: s.name, content: s.content });
         }

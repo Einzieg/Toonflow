@@ -4,6 +4,7 @@ import { z } from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { getReferenceImageBudget, urlToCompressedBase64 } from "@/utils/vm";
+import { mediaPromptSafetyInstruction } from "@/utils/promptSafety";
 const router = express.Router();
 
 type FlowImageTask =
@@ -55,12 +56,12 @@ async function runFlowImageTask(
 ) {
   const { model, references, quality, ratio, prompt, projectId } = input;
   try {
-    const imageClass = await u.Ai.Image(model).run(
+    const imageClass = await u.Ai.Image(model as `${string}:${string}`).run(
       {
-        prompt,
+        prompt: [mediaPromptSafetyInstruction(), prompt].filter(Boolean).join("\n"),
         referenceList: await getReferenceList(references),
-        size: quality,
-        aspectRatio: ratio,
+        size: quality as "1K" | "2K" | "4K",
+        aspectRatio: ratio as `${number}:${number}`,
       },
       {
         taskClass: "工作流图片生成",

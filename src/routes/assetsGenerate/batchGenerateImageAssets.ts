@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { buildAssetPrompt } from "@/utils/assetsPrompt";
+import { mediaPromptSafetyInstruction } from "@/utils/promptSafety";
 
 const router = express.Router();
 const DEFAULT_IMAGE_CONCURRENCY = 10;
@@ -72,6 +73,7 @@ function buildPrompt(cfg: AssetTypeConfig, type: AssetType, artStyle: string, na
 
     **最终生图约束：**
     ${assetPrompt}
+    ${mediaPromptSafetyInstruction()}
 
     请严格按照系统规范生成${cfg.promptEnd}。
   `;
@@ -106,8 +108,13 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
       "id",
       items.map((item: { id: number }) => item.id),
     )
-    .select("id", "describe", "assetsId");
+    .select("id", "describe", "assetsId", "prompt");
   const assetInfoMap = new Map(assetRows.map((item: any) => [item.id, item]));
+  const parentIds = assetRows.map((item: any) => item.assetsId).filter((id: any) => id != null);
+  const parentRows = parentIds.length
+    ? await u.db("o_assets").whereIn("id", parentIds).select("id", "name", "describe", "prompt")
+    : [];
+  const parentInfoMap = new Map(parentRows.map((item: any) => [item.id, item]));
 
   // 2. 逐条插入 o_image 占位记录，收集 imageId 列表
   const totalNovelId: number[] = [];
@@ -133,14 +140,16 @@ export default router.post("/", validateFields(requestSchema), async (req, res) 
       }
       const cfg = assetTypeConfig[item.type as AssetType];
       if (!cfg) return;
-      const assetInfo = assetInfoMap.get(item.id) as { describe?: string | null; assetsId?: number | null } | undefined;
+      const assetInfo = assetInfoMap.get(item.id) as { describe?: string | null; assetsId?: number | null; prompt?: string | null } | undefined;
       const assetDescribe = item.describe ?? assetInfo?.describe ?? "";
       const derivative = Boolean(assetInfo?.assetsId);
+      const parentAssetInfo = derivative ? parentInfoMap.get(assetInfo?.assetsId) : null;
 
       await u.db("o_assets").where("id", item.id).update({ imageId });
 
       const imagePath = `/${projectId}/${cfg.dir}/${uuidv4()}.jpg`;
-      const userPrompt = buildPrompt(cfg, item.type as AssetType, project.artStyle ?? "", item.name, assetDescribe, item.prompt, derivative);
+      const promptContext = [item.prompt, assetInfo?.prompt, parentAssetInfo?.prompt, parentAssetInfo?.describe].filter(Boolean).join("\n");
+      const userPrompt = buildPrompt(cfg, item.type as AssetType, project.artStyle ?? "", item.name, assetDescribe, promptContext, derivative);
       const describe = `生成${cfg.label}图，名称：${item.name}，描述：${assetDescribe || "无详细描述"}，提示词：${item.prompt}`;
       const relatedObjects = { id: item.id, projectId, type: cfg.label };
       try {

@@ -14,8 +14,18 @@ import {
   type StoryboardBoardRatio,
 } from "@/utils/storyboardBoard";
 import { normalizeStoryboardDuration } from "@/utils/storyboardTrack";
+import { cleanupStoryboardVideoReferenceFiles } from "@/utils/storyboardVideoReference";
 
 const router = express.Router();
+const STALE_STORYBOARD_BOARD_MS = 30 * 60 * 1000;
+
+function isStaleGeneratingBoard(board: any) {
+  if (board?.state !== "生成中") return false;
+  const timestamp = Number(board.updateTime || board.createTime || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
+  const hasImage = Boolean(String(board.filePath || "").trim() || String(board.thumbPath || "").trim());
+  return !hasImage && Date.now() - timestamp > STALE_STORYBOARD_BOARD_MS;
+}
 
 function normalizeIds(ids: number[]) {
   return Array.from(new Set(ids.filter((id) => Number.isInteger(id))));
@@ -86,14 +96,21 @@ async function replaceOverlappingBoards(projectId: number, scriptId: number, sto
   const staleBoards = boards.filter((board: any) => parseStoryboardIds(board.storyboardIds).some((id) => selectedSet.has(id)));
   if (!staleBoards.length) return;
 
-  const runningBoard = staleBoards.find((board: any) => board.state === "生成中");
+  const runningBoard = staleBoards.find((board: any) => board.state === "生成中" && !isStaleGeneratingBoard(board));
   if (runningBoard) {
     throw new Error(`故事板 ${runningBoard.id} 正在生成中，请完成后再重新生成`);
   }
 
   const staleBoardIds = staleBoards.map((board: any) => Number(board.id)).filter((id) => Number.isInteger(id));
   await Promise.all(
-    staleBoards.flatMap((board: any) => [deleteOssFileIfExists(board.filePath), deleteOssFileIfExists(board.thumbPath)]),
+    staleBoards.flatMap((board: any) => [
+      deleteOssFileIfExists(board.filePath),
+      deleteOssFileIfExists(board.thumbPath),
+      cleanupStoryboardVideoReferenceFiles({
+        videoReferencePath: board.videoReferencePath,
+        frameManifest: board.frameManifest,
+      }),
+    ]),
   );
   await deleteBoardVideos(staleBoardIds);
   await u.db("o_storyboardBoard").whereIn("id", staleBoardIds).delete();
@@ -154,7 +171,7 @@ export default router.post(
     if (missingText) return res.status(400).send(error(`分镜 S${String(Number(missingText.index ?? 0) + 1).padStart(2, "0")} 缺少分镜文本`));
 
     const [project, script] = await Promise.all([
-      u.db("o_project").where("id", projectId).select("name", "type", "imageModel", "imageQuality", "videoRatio", "artStyle", "directorManual").first(),
+      u.db("o_project").where("id", projectId).select("name", "type", "imageModel", "imageQuality", "videoRatio", "videoModel", "artStyle", "directorManual").first(),
       u.db("o_script").where({ id: scriptId, projectId }).select("name", "content").first(),
     ]);
     if (!script) return res.status(400).send(error("剧集不存在或不属于当前项目"));
@@ -174,6 +191,7 @@ export default router.post(
       imageModel: String(project.imageModel),
       imageQuality: normalizeImageQuality(project.imageQuality),
       videoRatio: normalizeVideoRatio(project.videoRatio),
+      videoModel: project.videoModel,
       artStyle: project.artStyle,
       directorManual: project.directorManual,
       ratio: imageRatio,

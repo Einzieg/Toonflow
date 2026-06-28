@@ -91,6 +91,8 @@ const modelLoading = ref(false);
 const singleImageVideoModels = ref<SingleImageVideoModel[]>([]);
 const videoPreviewVisible = ref(false);
 const currentVideoSrc = ref("");
+const GROK_VIDEO_DURATIONS = [4, 5, 6, 7, 8, 9, 10] as const;
+const GROK_VIDEO_15_PREVIEW_DURATIONS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
 
 const selectedModelDetail = computed(() => singleImageVideoModels.value.find((item) => item.modelId === selectedModel.value)?.detail);
 const durationOptions = computed(() => {
@@ -118,14 +120,14 @@ function isGrokVideoModel(modelId: string, detail: VideoModelDetail) {
   return value.includes("grok-imagine-video") || (value.includes("grok") && value.includes("imagine") && value.includes("video"));
 }
 
-function isGrokImagineVideo15PreviewModel(modelId: string, detail: VideoModelDetail) {
+function isGrokVideo15PreviewModel(modelId: string, detail: VideoModelDetail) {
   const value = `${modelId} ${detail.name} ${detail.modelName}`.toLowerCase().replace(/\s+/g, "");
   return value.includes("grok-imagine-video-1.5-preview") || value.includes("grokimaginevideo1.5preview");
 }
 
 function normalizeModelDetail(modelId: string, detail: VideoModelDetail): VideoModelDetail {
   if (!isGrokVideoModel(modelId, detail)) return detail;
-  const durations = isGrokImagineVideo15PreviewModel(modelId, detail) ? [6, 10, 15] : [6, 10];
+  const durations = isGrokVideo15PreviewModel(modelId, detail) ? [...GROK_VIDEO_15_PREVIEW_DURATIONS] : [...GROK_VIDEO_DURATIONS];
   return {
     ...detail,
     durationResolutionMap: detail.durationResolutionMap?.map((item) => ({ ...item, duration: durations })) ?? [{ duration: durations, resolution: [] }],

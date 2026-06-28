@@ -7,6 +7,8 @@
           <span class="selectedCount" v-if="checkedTrackIds.length">{{ $t("workbench.generate.selected") }} {{ checkedTrackIds.length }} 段</span>
         </div>
         <div class="right f ac">
+          <t-button size="small" variant="outline" :disabled="checkedTrackIds.length < 2" @click="mergeSelectedTracks">合并分镜</t-button>
+          <t-button size="small" variant="outline" :disabled="!canUnmergeSelectedTrack" @click="unmergeSelectedTrack">取消合并</t-button>
           <t-button size="small" variant="outline" @click="batchDownloadVideo">{{ $t("workbench.generate.batchDownloadVideo") }}</t-button>
           <t-button size="small" variant="outline" @click="batchGenText">{{ $t("workbench.generate.batchGenerateText") }}</t-button>
           <t-button size="small" variant="outline" @click="batchGenVideo">{{ $t("workbench.generate.batchGenerateVideo") }}</t-button>
@@ -22,6 +24,7 @@
             getSelectedVideoSrc(track),
             getSelectedVideoCover(track),
             getTrackMediaMemo(track),
+            getTrackShotInfoMemo(track),
             track.selectVideoId,
           ]"
           :class="{ active: index === activeTrackIndex }"
@@ -66,6 +69,12 @@
             </template>
           </div>
           <span v-else class="emptyTrack">{{ $t("workbench.generate.emptyTrack", { index: index + 1 }) }}</span>
+          <div v-if="getTrackShotInfoLines(track).length" class="shotInfo" :title="getTrackShotInfoTitle(track)">
+            <div v-for="line in getTrackShotInfoLines(track)" :key="line">{{ line }}</div>
+          </div>
+          <div v-if="getTrackTimingSummary(track)" class="timingSummary">
+            {{ getTrackTimingSummary(track) }}
+          </div>
           <div class="deleteBtn" @click.stop="confirmDeleteTrack(index)">
             <i-close size="14" />
           </div>
@@ -117,6 +126,8 @@ const emit = defineEmits<{
 }>();
 const checkAll = ref(false); // 全选状态
 const checkedTrackIdSet = computed(() => new Set(checkedTrackIds.value));
+const selectedTracksInOrder = computed(() => getSelectedTracksInOrder());
+const canUnmergeSelectedTrack = computed(() => selectedTracksInOrder.value.length === 1 && isMergedTrack(selectedTracksInOrder.value[0]));
 
 /** 视频封面缓存 src -> dataURL */
 const videoCoverMap = ref<Record<string, string>>({});
@@ -142,11 +153,110 @@ function getTrackImageThumb(src?: string) {
 }
 
 function getTrackMediaMemo(track: TrackItem) {
-  return track.medias.map((media) => `${media.id}:${media.src ?? ""}:${media.fileType ?? ""}`).join("|");
+  return track.medias
+    .map((media) => `${media.id}:${media.src ?? ""}:${media.fileType ?? ""}:${media.referenceImageKind ?? ""}:${media.duration ?? ""}:${media.shotMeta?.durationReason ?? ""}`)
+    .join("|");
+}
+
+function normalizePromptText(value?: string | null) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractVideoDescField(value: string | undefined | null, field: string) {
+  const text = normalizePromptText(value);
+  if (!text) return "";
+  const fields = ["场景", "镜头", "画面", "动作", "情绪", "光影", "台词", "音效", "BGM", "音乐", "关联资产ID", "关联资产"];
+  const nextPattern = fields
+    .filter((item) => item !== field)
+    .map((item) => `(?:【${escapeRegExp(item)}】|${escapeRegExp(item)}[：:])`)
+    .join("|");
+  const pattern = new RegExp(`(?:【${escapeRegExp(field)}】|${escapeRegExp(field)}[：:])\\s*(.*?)(?=${nextPattern ? nextPattern + "|" : ""}$)`);
+  return normalizePromptText(text.match(pattern)?.[1] || "");
+}
+
+function compactShotText(value: string, maxLength = 46) {
+  const text = normalizePromptText(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function getMediaShotNo(media: TrackMedia) {
+  const metaShotNo = Number(media.shotMeta?.sourceShotNo);
+  if (Number.isFinite(metaShotNo) && metaShotNo > 0) return metaShotNo;
+  const index = Number(media.index);
+  if (Number.isFinite(index) && index >= 0) return index + 1;
+  return media.id ?? "";
+}
+
+function getStoryboardMediaShotInfo(media: TrackMedia) {
+  if (media.sources !== "storyboard") return "";
+  const prompt = normalizePromptText(media.prompt);
+  const visual = extractVideoDescField(prompt, "画面") || extractVideoDescField(prompt, "镜头") || extractVideoDescField(prompt, "场景");
+  const action = extractVideoDescField(prompt, "动作");
+  const parts = [`S${getMediaShotNo(media)}`];
+  if (visual) parts.push(`画面：${compactShotText(visual)}`);
+  if (action) parts.push(`动作：${compactShotText(action)}`);
+  if (parts.length === 1 && prompt) parts.push(compactShotText(prompt, 88));
+  return parts.join("  ");
+}
+
+function getTrackShotInfoLines(track: TrackItem) {
+  return track.medias.map(getStoryboardMediaShotInfo).filter(Boolean).slice(0, 3);
+}
+
+function getTrackShotInfoTitle(track: TrackItem) {
+  return track.medias.map(getStoryboardMediaShotInfo).filter(Boolean).join("\n");
+}
+
+function getTrackShotInfoMemo(track: TrackItem) {
+  return track.medias
+    .filter((media) => media.sources === "storyboard")
+    .map((media) => `${media.id}:${media.index ?? ""}:${media.prompt ?? ""}:${media.shotMeta?.sourceShotNo ?? ""}`)
+    .join("|");
+}
+
+function getTrackTimingSummary(track: TrackItem) {
+  const requestDuration = Number(track.duration);
+  const storyboardMedias = track.medias.filter((media) => media.sources === "storyboard");
+  const metas = storyboardMedias.map((media) => media.shotMeta).filter(Boolean);
+  const sourceDuration = storyboardMedias.reduce((sum, media) => {
+    const duration = Number(media.duration);
+    return sum + (Number.isFinite(duration) && duration > 0 ? duration : 0);
+  }, 0);
+  if (!metas.length && (!Number.isFinite(requestDuration) || requestDuration <= 0) && sourceDuration <= 0) return "";
+
+  const charCount = metas.reduce((sum, meta) => sum + Number(meta?.dialogueCharCount || 0), 0);
+  const speechDuration = metas.reduce((sum, meta) => sum + Number(meta?.estimatedSpeechDuration || 0), 0);
+  const requestDurationText = Number.isFinite(requestDuration) && requestDuration > 0 ? `请求${requestDuration}s` : "";
+  const sourceDurationText = sourceDuration > 0 ? `源分镜${Number(sourceDuration.toFixed(1))}s` : "";
+  const adaptedText =
+    Number.isFinite(requestDuration) && requestDuration > 0 && sourceDuration > 0 && Math.abs(requestDuration - sourceDuration) > 0.01
+      ? "模型适配"
+      : "";
+  return [
+    requestDurationText,
+    sourceDurationText,
+    adaptedText,
+    charCount > 0 ? `${charCount}字` : "",
+    speechDuration > 0 ? `口播${Number(speechDuration.toFixed(1))}s` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function getTrackKey(track: TrackItem, index: number) {
   return track.id != null ? track.id : `track-${index}`;
+}
+
+function getStoryboardMediaCount(track: TrackItem) {
+  return track.storyboardCount ?? track.medias.filter((media) => media.sources === "storyboard").length;
+}
+
+function isMergedTrack(track: TrackItem | undefined) {
+  return Boolean(track?.canUnmerge || (track && getStoryboardMediaCount(track) > 1));
 }
 
 /** 截取视频首帧封面 */
@@ -250,6 +360,86 @@ async function addTrack() {
   emit("getData");
   activeTrackIndex.value = trackList.value.length - 1;
 }
+
+function getSelectedTracksInOrder() {
+  return trackList.value.filter((track) => track.id != null && checkedTrackIds.value.includes(track.id));
+}
+
+function isSelectedTracksAdjacent() {
+  const selectedIndexes = trackList.value
+    .map((track, index) => (track.id != null && checkedTrackIds.value.includes(track.id) ? index : -1))
+    .filter((index) => index >= 0);
+  if (selectedIndexes.length < 2) return false;
+  return Math.max(...selectedIndexes) - Math.min(...selectedIndexes) + 1 === selectedIndexes.length;
+}
+
+function mergeSelectedTracks() {
+  const selectedTracks = getSelectedTracksInOrder();
+  const selectedTrackIds = selectedTracks.map((track) => track.id).filter((id): id is number => id != null);
+  if (selectedTrackIds.length < 2) return window.$message.warning("至少选择两个相邻分镜轨道");
+  if (!isSelectedTracksAdjacent()) return window.$message.warning("只能合并相邻分镜轨道");
+
+  const dialog = DialogPlugin.confirm({
+    header: "合并分镜",
+    body: `将 ${selectedTrackIds.length} 个相邻分镜轨道合并为一个视频轨道。所选轨道下的视频历史会一起保留到合并后的轨道，合并后需要重新生成视频提示词。`,
+    confirmBtn: "确认合并",
+    cancelBtn: $t("settings.memory.msg.cancel"),
+    onConfirm: async () => {
+      try {
+        const { data } = await axios.post("/production/workbench/mergeTracks", {
+          projectId: project.value?.id,
+          scriptId: episodesId.value ?? 0,
+          trackIds: selectedTrackIds,
+        });
+        checkedTrackIds.value = [];
+        checkAll.value = false;
+        const targetIndex = trackList.value.findIndex((track) => track.id === data.targetTrackId);
+        if (targetIndex >= 0) activeTrackIndex.value = targetIndex;
+        window.$message.success(`已合并 ${data.storyboardCount} 个分镜，保留 ${data.videoCount ?? 0} 个视频`);
+        emit("getData");
+      } catch (e: any) {
+        window.$message.error(e.message ?? "合并分镜失败");
+      } finally {
+        dialog.destroy();
+      }
+    },
+    onCancel: () => dialog.destroy(),
+  });
+}
+
+function unmergeSelectedTrack() {
+  const selectedTrack = selectedTracksInOrder.value[0];
+  if (!selectedTrack?.id) return window.$message.warning("请选择一个已合并的分镜轨道");
+  if (!isMergedTrack(selectedTrack)) return window.$message.warning("当前轨道不是合并分镜");
+
+  const storyboardCount = getStoryboardMediaCount(selectedTrack);
+  const dialog = DialogPlugin.confirm({
+    header: "取消合并",
+    body: `将当前轨道拆回 ${storyboardCount} 个分镜轨道。已有视频会按合并快照尽量恢复；旧数据没有快照时，视频会保留在拆出的第一段轨道，不会删除。`,
+    confirmBtn: "确认取消合并",
+    cancelBtn: $t("settings.memory.msg.cancel"),
+    onConfirm: async () => {
+      try {
+        const { data } = await axios.post("/production/workbench/unmergeTracks", {
+          projectId: project.value?.id,
+          scriptId: episodesId.value ?? 0,
+          trackId: selectedTrack.id,
+        });
+        checkedTrackIds.value = [];
+        checkAll.value = false;
+        const targetIndex = trackList.value.findIndex((track) => track.id === data.trackIds?.[0]);
+        if (targetIndex >= 0) activeTrackIndex.value = targetIndex;
+        window.$message.success(`已取消合并 ${data.storyboardCount} 个分镜，保留 ${data.videoCount ?? 0} 个视频`);
+        emit("getData");
+      } catch (e: any) {
+        window.$message.error(e.message ?? "取消合并失败");
+      } finally {
+        dialog.destroy();
+      }
+    },
+    onCancel: () => dialog.destroy(),
+  });
+}
 /** 获取 URL 中的文件扩展名 */
 function getFileExtension(url: string): string {
   const ext = url.split(".").pop()?.split(/[#?]/)[0];
@@ -290,7 +480,7 @@ function batchGenText() {
       const trackId = track.id;
       let info = [];
       if (props.modelParmas.mode == "text") {
-        info = track?.medias.map(({ id, sources }) => ({ id, sources }));
+        info = track?.medias.map(({ id, sources, referenceImageKind }) => ({ id, sources, referenceImageKind }));
       } else {
         info = getTrackUploadInfo(track);
       }
@@ -328,18 +518,36 @@ function getTrackUploadInfo(track: TrackItem, filterEmpty = false) {
   const activeTrackId = trackList.value[activeTrackIndex.value]?.id;
   const model = String(props.modelParmas.model || "").toLowerCase().replace(/\s+/g, "");
   const isSeedance2 = model.includes("seedance") && (model.includes("seedance-2-0") || model.includes("seedance-2.0") || model.includes("seedance2.0"));
+  const isGrok15Preview = model.includes("grok-imagine-video-1.5-preview") || model.includes("grokimaginevideo1.5preview");
+  const isEffectiveSingleImageMode = props.modelParmas.mode === "singleImage" || isGrok15Preview;
   const useVolcengineAssetUri = model.startsWith("volcengine:") && isSeedance2;
   const isUsableReference = (item: UploadItem | TrackMedia) =>
     Boolean(item.src || (useVolcengineAssetUri && (item.volcengineAssetUri || (item.sources === "assets" && item.id))));
+  const selectItemsForMode = (items: (UploadItem | TrackMedia)[]) => {
+    const usableItems = filterEmpty ? items.filter((item) => isUsableReference(item)) : items;
+    const frameModes = ["startEndRequired", "endFrameOptional", "startFrameOptional"];
+    if (frameModes.includes(props.modelParmas.mode)) return usableItems.slice(0, 2);
+    if (isEffectiveSingleImageMode) {
+      const storyboardItem = usableItems.find((item) => item.sources === "storyboard" && item.src);
+      const selected = storyboardItem ?? usableItems[0];
+      return selected ? [selected] : [];
+    }
+    return usableItems;
+  };
 
   if (track.id === activeTrackId) {
     const items = props.imageList as UploadItem[];
-    return (filterEmpty ? items.filter((item) => isUsableReference(item)) : items).map(({ id, sources }) => ({
+    return selectItemsForMode(items).map(({ id, sources, referenceImageKind }) => ({
       id,
       sources: (sources ?? "storyboard") as string,
+      referenceImageKind,
     }));
   }
-  return track.medias.filter((m) => !filterEmpty || isUsableReference(m)).map(({ id, sources }) => ({ id, sources: (sources ?? "storyboard") as string }));
+  return selectItemsForMode(track.medias).map(({ id, sources, referenceImageKind }) => ({
+    id,
+    sources: (sources ?? "storyboard") as string,
+    referenceImageKind,
+  }));
 }
 /** 批量为已勾选轨道生成视频 */
 function batchGenVideo() {
@@ -376,8 +584,13 @@ function batchGenVideo() {
             };
             if (!payload.prompt) return window.$message.warning($t("workbench.generate.skipDataWithEmptyVideoPromptWords"));
             const { data } = await axios.post("/production/workbench/generateVideo", payload);
+            const result = data as number | { id: number; prompt?: string };
+            const videoId = typeof result === "object" ? result.id : result;
+            if (typeof result === "object" && typeof result.prompt === "string") {
+              track.prompt = result.prompt;
+            }
             track.videoList.push({
-              id: data,
+              id: videoId,
               state: "生成中",
               src: "",
             });
@@ -443,7 +656,7 @@ watch(
     }
   }
   .itemBox {
-    height: 150px;
+    height: 190px;
     flex: 1;
     min-height: 0;
     width: 100%;
@@ -462,13 +675,14 @@ watch(
     .item {
       border-radius: 8px;
       flex-shrink: 0;
-      width: 200px;
+      width: 230px;
       border: 1px solid var(--td-gray-color-3);
       overflow: hidden;
       cursor: pointer;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
       position: relative;
       contain: layout style;
       &.active {
@@ -491,7 +705,8 @@ watch(
       }
       .thumbGroup {
         width: 100%;
-        height: 100%;
+        height: 96px;
+        flex: 0 0 96px;
         display: flex;
         .thumb {
           flex: 1;
@@ -514,6 +729,38 @@ watch(
       .emptyTrack {
         color: var(--td-text-color-placeholder);
         font-size: 12px;
+        height: 96px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .shotInfo {
+        margin: 6px 8px 24px;
+        color: var(--td-text-color-primary);
+        font-size: 12px;
+        line-height: 18px;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        white-space: pre-line;
+      }
+      .timingSummary {
+        position: absolute;
+        left: 6px;
+        right: 6px;
+        top: 30px;
+        z-index: 2;
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.56);
+        font-size: 11px;
+        line-height: 18px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        pointer-events: none;
       }
       .trackCheck {
         position: absolute;

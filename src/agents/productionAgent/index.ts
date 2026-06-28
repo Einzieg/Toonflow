@@ -113,6 +113,87 @@ async function ensureDefaultRoleDerivatives(resTool: ResTool, socket: Socket, pr
   return `\n系统兜底：已为缺少人物衍生的角色补全默认服装定装：${created.join("、")}。`;
 }
 
+function extractCompleteXmlTagContent(text: string, tag: string) {
+  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`, "g");
+  let match: RegExpExecArray | null;
+  let lastValue: string | null = null;
+  while ((match = regex.exec(text)) !== null) {
+    lastValue = match[1]?.trim() ?? "";
+  }
+  return lastValue;
+}
+
+function isValidScriptPlanContent(value: string | null | undefined) {
+  const text = String(value ?? "").trim();
+  if (text.length < 120) return false;
+  return /分场汇总表|逐场注意事项|场间过渡|场次/.test(text);
+}
+
+async function persistScriptPlanToWorkspace(socket: Socket, resTool: ResTool, scriptPlan: string) {
+  const projectId = Number(resTool.data.projectId);
+  const scriptId = Number(resTool.data.scriptId);
+  if (!Number.isInteger(projectId) || !Number.isInteger(scriptId)) return;
+
+  const existing = await u
+    .db("o_agentWorkData")
+    .where("projectId", String(projectId))
+    .where("episodesId", String(scriptId))
+    .where("key", "productionAgent")
+    .first();
+
+  let data: Record<string, any> = {};
+  if (existing?.data) {
+    try {
+      data = JSON.parse(existing.data);
+    } catch {
+      data = {};
+    }
+  }
+
+  if (!data.script) {
+    const scriptData = await u.db("o_script").where({ id: scriptId, projectId }).select("content").first();
+    data.script = scriptData?.content ?? "";
+  }
+  if (!Array.isArray(data.storyboard)) data.storyboard = [];
+  if (!data.workbench) data.workbench = { videoList: [] };
+  data.scriptPlan = scriptPlan;
+
+  if (existing) {
+    await u
+      .db("o_agentWorkData")
+      .where("projectId", String(projectId))
+      .where("episodesId", String(scriptId))
+      .where("key", "productionAgent")
+      .update({ data: JSON.stringify(data), updateTime: Date.now() });
+  } else {
+    await u.db("o_agentWorkData").insert({
+      projectId,
+      episodesId: scriptId,
+      key: "productionAgent",
+      data: JSON.stringify(data),
+      createTime: Date.now(),
+      updateTime: Date.now(),
+    });
+  }
+
+  await Promise.race([
+    new Promise((resolve) =>
+      socket.emit(
+        "setScriptPlan",
+        {
+          projectId,
+          scriptId,
+          scriptPlan,
+          length: scriptPlan.length,
+        },
+        (res: any) => resolve(res),
+      ),
+    ),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
+}
+
 function buildMemPrompt(mem: Awaited<ReturnType<Memory["get"]>>): string {
   let memoryContext = "";
   if (mem.rag.length) {
@@ -154,7 +235,8 @@ export async function runDecisionAI(ctx: AgentContext) {
   // const findData = models.find((i: any) => i.modelName == videoModelName);
   // const isRef = findData.mode.every((i: any) => Array.isArray(i));
   console.log("%c Line:67 🍪 isRef", "background:#fca650", isRef);
-  const modelInfo = `项目使用的模型如下：\n图像模型：${imageModelName}\n视频模型：${videoModelName}\n多参：${isRef ? "是" : "否"}`;
+  const videoModeText = Array.isArray(videoMode) ? JSON.stringify(videoMode) : String(videoMode || "未配置");
+  const modelInfo = `项目使用的模型如下：\n图像模型：${imageModelName}\n视频模型：${videoModelName}\n视频模式：${videoModeText}\n多参：${isRef ? "是" : "否"}\n阶段5分镜面板模式：调用 set_storyboard_panel_from_table({ mode: "auto", startNo, endNo }) 分段写入，每批最多10条；工具自动选择 text/imageReference/singleImage`;
 
   const mem = buildMemPrompt(await memory.get(text));
 
@@ -249,37 +331,94 @@ async function createSubAgent(parentCtx: AgentContext) {
   }
   const isRef = Array.isArray(videoMode) ? true : false;
   console.log("%c Line:153 🥤 isRef", "background:#42b983", isRef);
-  const modelInfo = `项目使用的模型如下：\n图像模型：${imageModelName}\n视频模型：${videoModelName}\n多参：${isRef ? "是" : "否"}`;
+  const videoModeText = Array.isArray(videoMode) ? JSON.stringify(videoMode) : String(videoMode || "未配置");
+  const modelInfo = `项目使用的模型如下：\n图像模型：${imageModelName}\n视频模型：${videoModelName}\n视频模式：${videoModeText}\n多参：${isRef ? "是" : "否"}\n阶段5分镜面板模式：调用 set_storyboard_panel_from_table({ mode: "auto", startNo, endNo }) 分段写入，每批最多10条；工具自动选择 text/imageReference/singleImage`;
+  const isSuccessfulStoryboardTableResult = (result: string) => {
+    const text = String(result || "");
+    if (!text.trim()) return false;
+    if (/(未通过校验|生成失败|写入失败|已过期|缺少|无法|错误|REWORK|AUTO_FIX|NEED_USER)/i.test(text)) return false;
+    return /(阶段4已完成|分镜表生成完成|分镜表写入完成|已由\s*shotPlan\s*生成分镜表|自动渲染生成标准\s*13\s*列分镜表)/i.test(text);
+  };
+  const countStoryboardTableRows = (content: unknown) => {
+    return String(content ?? "")
+      .split(/\r?\n/)
+      .filter((line) => /^\|\s*\d+\s*\|/.test(line.trim())).length;
+  };
+  const getProductionWorkDataSnapshot = async () => {
+    const row = await u
+      .db("o_agentWorkData")
+      .where("projectId", String(resTool.data.projectId))
+      .where("episodesId", String(resTool.data.scriptId))
+      .where("key", "productionAgent")
+      .first();
 
-  // const run_sub_agent_execution = tool({
-  //   description: "执行层子Agent，负责衍生资产、",
-  //   inputSchema: promptInput,
-  //   execute: async ({ prompt }) => {
-  //     const skill = path.join(u.getPath("skills"), "production_agent_execution.md");
-  //     const systemPrompt = await fs.promises.readFile(skill, "utf-8");
-  //     const addPrompt =
-  //       "\n" +
-  //       [
-  //         "你必须使用如下XML格式写入工作区：\n```",
-  //         "拍摄计划：<scriptPlan>内容</scriptPlan>",
-  //         "分镜表：<storyboardTable>内容</storyboardTable>",
-  //         "分镜面板：<storyboardItem videoDesc='视频描述' prompt=提示词内容 track='分组' duration='视频推荐时间' associateAssetsIds='[该分镜所需的资产ID列表]'></storyboardItem>",
-  //         "```",
-  //       ].join("\n");
+    let data: Record<string, any> = {};
+    if (row?.data) {
+      try {
+        data = JSON.parse(row.data);
+      } catch {
+        data = {};
+      }
+    }
 
-  //     return runAgent({
-  //       prompt,
-  //       system: systemPrompt + addPrompt,
-  //       name: "执行导演",
-  //       memoryKey: "assistant:execution",
-  //       messages: [
-  //         { role: "assistant", content: artSkills.prompt + `\n${modelInfo}` },
-  //         { role: "user", content: prompt + addPrompt },
-  //       ],
-  //       tools: { ...artSkills.tools },
-  //     });
-  //   },
-  // });
+    const shotPlanShots = Array.isArray(data?.shotPlan?.shots) ? data.shotPlan.shots.length : 0;
+    const draftShots = Array.isArray(data?.shotPlanDraft?.shots) ? data.shotPlanDraft.shots.length : 0;
+    const draftBeats = Array.isArray(data?.shotPlanDraft?.beats) ? data.shotPlanDraft.beats.length : 0;
+    const storyboardTableRows = countStoryboardTableRows(data?.storyboardTable);
+
+    return {
+      hasRow: Boolean(row),
+      shotPlanShots,
+      draftShots,
+      draftBeats,
+      storyboardTableRows,
+    };
+  };
+  const formatStage4State = (state: Awaited<ReturnType<typeof getProductionWorkDataSnapshot>>) => {
+    return `正式 shotPlan.shots=${state.shotPlanShots}，storyboardTable 行数=${state.storyboardTableRows}，草稿 beats=${state.draftBeats}，草稿 shots=${state.draftShots}`;
+  };
+  const ensureStoryboardTablePersisted = async (nextStage: string) => {
+    const state = await getProductionWorkDataSnapshot();
+    if (state.shotPlanShots > 0 && state.storyboardTableRows > 0) return "";
+    return `已拦截：${nextStage} 前置条件未满足，阶段4分镜表未真实落库（${formatStage4State(state)}）。必须重新执行阶段4：start_shot_plan 写入 beats，append_shot_plan_shots 分批写入正式 shots（最后一批 isFinal=true），再调用 render_storyboard_table_from_shot_plan。禁止继续进入阶段5/6。`;
+  };
+  const getStoryboardPanelSnapshot = async () => {
+    const [storyboardCountRow, videoTrackCountRow] = await Promise.all([
+      u
+        .db("o_storyboard")
+        .where("projectId", String(resTool.data.projectId))
+        .where("scriptId", String(resTool.data.scriptId))
+        .count({ count: "*" })
+        .first(),
+      u
+        .db("o_videoTrack")
+        .where("projectId", String(resTool.data.projectId))
+        .where("scriptId", String(resTool.data.scriptId))
+        .count({ count: "*" })
+        .first(),
+    ]);
+    const readCount = (row: any) => Number(row?.count ?? row?.["count(*)"] ?? 0);
+    return {
+      storyboardCount: readCount(storyboardCountRow),
+      videoTrackCount: readCount(videoTrackCountRow),
+    };
+  };
+  const ensureStoryboardPanelPersisted = async (nextStage: string) => {
+    const state = await getStoryboardPanelSnapshot();
+    if (state.storyboardCount > 0) return "";
+    return `已拦截：${nextStage} 前置条件未满足，分镜面板未真实落库（o_storyboard=${state.storyboardCount}，o_videoTrack=${state.videoTrackCount}）。必须先重新执行阶段5：按每批最多10条调用 set_storyboard_panel_from_table({ mode:"auto", startNo, endNo })，并确认 get_flowData("storyboard") 返回非空。禁止继续进入阶段6。`;
+  };
+  const runSupervisionAgent = async (prompt: string) => {
+    const skill = path.join(u.getPath("skills"), "production_agent_supervision.md");
+    const systemPrompt = await fs.promises.readFile(skill, "utf-8");
+    return runAgent({
+      key: "productionAgent:supervisionAgent",
+      prompt,
+      system: systemPrompt,
+      name: "监制",
+      memoryKey: "assistant:supervision",
+    });
+  };
 
   //衍生资产分析与信息写入
   const run_sub_agent_derive_assets = tool({
@@ -338,9 +477,10 @@ async function createSubAgent(parentCtx: AgentContext) {
       const skill = path.join(u.getPath("skills"), "production_execution_director_plan.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
 
-      const addPrompt = "\n你必须使用如下XML格式写入工作区：\n```\n<scriptPlan>内容</scriptPlan>\n```";
+      const addPrompt =
+        '\n阶段1导演计划必须通过工具写入：调用 set_script_plan({ content }) 写入完整导演计划正文。禁止使用 <scriptPlan> XML 输出作为主要写入方式；写入后用 get_flowData("scriptPlan") 确认内容已保存。';
 
-      return runAgent({
+      const result = await runAgent({
         key: "productionAgent:directorPlanAgent",
         prompt,
         system: systemPrompt + addPrompt,
@@ -352,6 +492,17 @@ async function createSubAgent(parentCtx: AgentContext) {
         ],
         tools: { activate_skill: artSkills.tools.activate_skill },
       });
+      const scriptPlan = extractCompleteXmlTagContent(result, "scriptPlan");
+      if (isValidScriptPlanContent(scriptPlan)) {
+        await persistScriptPlanToWorkspace(parentCtx.socket, resTool, scriptPlan!.trim());
+      } else if (!/导演计划写入完成|set_script_plan/i.test(result)) {
+        console.warn("[productionAgent] 未检测到有效 scriptPlan XML，跳过导演计划持久化", {
+          projectId: resTool.data.projectId,
+          scriptId: resTool.data.scriptId,
+          resultLength: result.length,
+        });
+      }
+      return result;
     },
   });
 
@@ -363,6 +514,8 @@ async function createSubAgent(parentCtx: AgentContext) {
       if (/(故事板先行|先出故事板|从剧本生成故事板图片|故事板转视频|单图故事板)/.test(`${parentCtx.text}\n${prompt}`)) {
         return "已拦截：当前是故事板先行语境，应使用故事板先行工具，不调用分镜图生成子 Agent。";
       }
+      const blockReason = await ensureStoryboardPanelPersisted("阶段6");
+      if (blockReason) return blockReason;
       const skill = path.join(u.getPath("skills"), "production_execution_storyboard_gen.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
       return runAgent({
@@ -400,13 +553,15 @@ async function createSubAgent(parentCtx: AgentContext) {
       if (/(故事板先行|先出故事板|从剧本生成故事板图片|故事板转视频|单图故事板)/.test(`${parentCtx.text}\n${prompt}`)) {
         return "已拦截：当前是故事板先行语境，应使用故事板先行工具，不调用分镜面板子 Agent。";
       }
+      const stage4BlockReason = await ensureStoryboardTablePersisted("阶段5");
+      if (stage4BlockReason) return stage4BlockReason;
       const skill = path.join(u.getPath("skills"), "production_execution_storyboard_panel.md");
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
 
       const addPrompt =
-        "\n你必须使用如下XML格式写入工作区：\n```\n<storyboardItem videoDesc='视频描述' prompt='提示词内容' track='分组' shouldGenerateImage='true/false' duration='视频推荐时间' associateAssetsIds='[该分镜所需的资产ID列表]'></storyboardItem>\n```";
+        "\n分镜面板写入只有一个入口：set_storyboard_panel_from_table。调用时必须传 mode:\"auto\"，由工具根据项目视频模型自动选择 text/imageReference/singleImage。必须按 startNo/endNo 分段写入，每批最多10条；即使面板为空的首次写入，也禁止一次写入全部分镜。完整重写时先调用 clear_storyboard_panel，再按 1-10、11-20、21-30 这种范围连续调用 set_storyboard_panel_from_table({ mode:\"auto\", startNo, endNo })；补齐缺失时也按缺失序号分批调用。不要使用 replaceAll 做全量写入。不要输出可被解析为写入内容的文本，不要只返回文字确认。每批写入后读取 get_flowData(\"storyboard\") 确认真正落库数量，全部批次完成后再次确认总数。";
 
-      return runAgent({
+      const executionResult = await runAgent({
         key: "productionAgent:storyboardPanelAgent",
         prompt,
         system: systemPrompt + addPrompt,
@@ -418,6 +573,9 @@ async function createSubAgent(parentCtx: AgentContext) {
         ],
         tools: { activate_skill: productionSkills.tools.activate_skill },
       });
+      const panelBlockReason = await ensureStoryboardPanelPersisted("阶段6");
+      if (panelBlockReason) return `${executionResult}\n\n[落库校验]\n${panelBlockReason}`;
+      return executionResult;
     },
   });
 
@@ -430,9 +588,9 @@ async function createSubAgent(parentCtx: AgentContext) {
       const systemPrompt = await fs.promises.readFile(skill, "utf-8");
 
       const addPrompt =
-        "\n你必须用 set_storyboard_table 工具写入完整分镜表。长表必须分块写入：第一块 mode=replace，后续块 mode=append。禁止只输出纯文本分析。兼容格式如下：\n```\n<storyboardTable>内容</storyboardTable>\n```";
+        "\n阶段4必须走分块主工具链：先调用 start_shot_plan 写入 beats，再用 append_shot_plan_shots 按 shotNo 顺序分批追加 shots（每批 8-12 个，最后一批 isFinal=true），最后调用 render_storyboard_table_from_shot_plan 自动生成标准 13 列分镜表。小于 12 个镜头的小项目才可使用 set_shot_plan 一次性写入。不要只输出文本草案或分析。";
 
-      return runAgent({
+      const executionResult = await runAgent({
         key: "productionAgent:storyboardTableAgent",
         prompt,
         system: systemPrompt + addPrompt,
@@ -444,6 +602,12 @@ async function createSubAgent(parentCtx: AgentContext) {
         ],
         tools: { activate_skill: productionSkills.tools.activate_skill },
       });
+      if (!isSuccessfulStoryboardTableResult(executionResult)) return executionResult;
+      const stage4BlockReason = await ensureStoryboardTablePersisted("阶段5/6");
+      if (stage4BlockReason) return `${executionResult}\n\n[落库校验]\n${stage4BlockReason}`;
+
+      const supervisionResult = await runSupervisionAgent("请审核【阶段4：构建分镜表】产出物，重点检查结构、时长、台词覆盖、资产关联。");
+      return `${executionResult}\n\n[自动监督审核]\n${supervisionResult}`;
     },
   });
 
@@ -451,15 +615,7 @@ async function createSubAgent(parentCtx: AgentContext) {
     description: "运行监督层subAgent执行独立任务，完成后返回结果",
     inputSchema: promptInput,
     execute: async ({ prompt }) => {
-      const skill = path.join(u.getPath("skills"), "production_agent_supervision.md");
-      const systemPrompt = await fs.promises.readFile(skill, "utf-8");
-      return runAgent({
-        key: "productionAgent:supervisionAgent",
-        prompt,
-        system: systemPrompt,
-        name: "监制",
-        memoryKey: "assistant:supervision",
-      });
+      return runSupervisionAgent(prompt);
     },
   });
 
@@ -502,8 +658,67 @@ async function consumeFullStream(
   let msg = initialMsg;
   let text = msg.text();
   let thinking: ReturnType<typeof msg.thinking> | null = null;
+  let progressThinking: ReturnType<typeof msg.thinking> | null = null;
   let thinkTime = 0;
   let fullResponse = "";
+  let activeToolName = "";
+  let activeToolInputChars = 0;
+  let stepCount = 0;
+  let lastVisibleUpdate = Date.now();
+  let lastToolInputUpdate = 0;
+
+  const toolLabels: Record<string, string> = {
+    activate_skill: "加载技能",
+    get_flowData: "获取工作区数据",
+    set_script_plan: "写入导演计划",
+    start_shot_plan: "开始镜头规划分块",
+    append_shot_plan_shots: "追加镜头规划分块",
+    set_shot_plan: "写入镜头规划",
+    render_storyboard_table_from_shot_plan: "生成分镜表",
+    set_storyboard_table: "写入分镜表",
+    clear_storyboard_panel: "清空分镜面板",
+    set_storyboard_panel_from_table: "写入分镜面板",
+    generate_storyboard_images: "生成分镜图片",
+  };
+
+  const getToolLabel = (toolName?: string) => {
+    if (!toolName) return "后台任务";
+    return toolLabels[toolName] ?? toolName;
+  };
+
+  const touchVisibleUpdate = () => {
+    lastVisibleUpdate = Date.now();
+  };
+
+  const ensureProgressThinking = (title: string) => {
+    if (!progressThinking) {
+      progressThinking = msg.thinking(title);
+    } else {
+      progressThinking.updateTitle(title);
+    }
+    return progressThinking;
+  };
+
+  const appendProgress = (title: string, line: string) => {
+    const stream = ensureProgressThinking(title);
+    stream.appendText(`${new Date().toLocaleTimeString("zh-CN", { hour12: false })} ${line}\n`);
+    touchVisibleUpdate();
+  };
+
+  const completeProgressThinking = () => {
+    if (!progressThinking) return;
+    progressThinking.complete();
+    progressThinking = null;
+  };
+
+  const heartbeat = setInterval(() => {
+    if (Date.now() - lastVisibleUpdate < 15000) return;
+    const title = activeToolName ? `正在执行：${getToolLabel(activeToolName)}` : "执行导演仍在处理...";
+    const detail = activeToolName
+      ? `后台仍在执行 ${getToolLabel(activeToolName)}，请等待结果返回。`
+      : "后台仍在处理模型输出或工具调用，尚未返回新的流式内容。";
+    appendProgress(title, detail);
+  }, 15000);
 
   try {
     for await (const chunk of fullStream) {
@@ -511,30 +726,76 @@ async function consumeFullStream(
       if (syncMsg) {
         const newMsg = syncMsg();
         if (newMsg !== msg) {
+          completeProgressThinking();
           msg = newMsg;
           text = msg.text();
         }
       }
       if (chunk.type === "reasoning-start") {
+        completeProgressThinking();
         thinkTime = Date.now();
         thinking = msg.thinking("思考中...");
+        touchVisibleUpdate();
       } else if (chunk.type === "reasoning-delta") {
         thinking?.append(chunk.text);
+        touchVisibleUpdate();
       } else if (chunk.type === "reasoning-end") {
         thinkTime = Date.now() - thinkTime;
         thinking?.updateTitle(`思考完毕（${(thinkTime / 1000).toFixed(1)} 秒）`);
         thinking?.complete();
         thinking = null;
+        touchVisibleUpdate();
       } else if (chunk.type === "text-delta") {
+        completeProgressThinking();
         text.append(chunk.text);
         fullResponse += chunk.text;
+        touchVisibleUpdate();
+      } else if (chunk.type === "start-step") {
+        stepCount += 1;
+        appendProgress(`执行导演正在处理第 ${stepCount} 轮`, `开始第 ${stepCount} 轮模型推理。`);
+      } else if (chunk.type === "tool-input-start") {
+        activeToolName = chunk.toolName || activeToolName;
+        activeToolInputChars = 0;
+        lastToolInputUpdate = Date.now();
+        appendProgress(`正在准备：${getToolLabel(activeToolName)}`, `开始准备 ${getToolLabel(activeToolName)} 的调用参数。`);
+      } else if (chunk.type === "tool-input-delta") {
+        activeToolInputChars += String(chunk.delta || "").length;
+        if (Date.now() - lastToolInputUpdate > 5000) {
+          lastToolInputUpdate = Date.now();
+          appendProgress(
+            `正在准备：${getToolLabel(activeToolName)}`,
+            `正在组织 ${getToolLabel(activeToolName)} 的参数，已生成约 ${activeToolInputChars} 字符。`,
+          );
+        }
+      } else if (chunk.type === "tool-input-end") {
+        appendProgress(`正在准备：${getToolLabel(activeToolName)}`, `${getToolLabel(activeToolName)} 参数准备完成，等待执行。`);
+      } else if (chunk.type === "tool-call") {
+        activeToolName = chunk.toolName || activeToolName;
+        appendProgress(`正在执行：${getToolLabel(activeToolName)}`, `已发起 ${getToolLabel(activeToolName)}。`);
+      } else if (chunk.type === "tool-result") {
+        const toolName = chunk.toolName || activeToolName;
+        appendProgress(`已完成：${getToolLabel(toolName)}`, `${getToolLabel(toolName)} 已返回结果。`);
+        activeToolName = "";
+        activeToolInputChars = 0;
+      } else if (chunk.type === "tool-error") {
+        const toolName = chunk.toolName || activeToolName;
+        appendProgress(`执行失败：${getToolLabel(toolName)}`, `${getToolLabel(toolName)} 返回错误：${chunk.error ?? "未知错误"}`);
+        activeToolName = "";
+        activeToolInputChars = 0;
+      } else if (chunk.type === "finish-step") {
+        appendProgress(`执行导演完成第 ${stepCount} 轮`, `第 ${stepCount} 轮处理完成，原因：${chunk.finishReason ?? "unknown"}。`);
+      } else if (chunk.type === "abort") {
+        throw Object.assign(new Error(chunk.reason || "生成已停止"), { name: "AbortError" });
       } else if (chunk.type === "error") {
         throw chunk.error;
       }
     }
+    clearInterval(heartbeat);
+    completeProgressThinking();
     if (syncMsg) {
       const newMsg = syncMsg();
       if (newMsg !== msg) {
+        completeProgressThinking();
         msg = newMsg;
         text = msg.text();
       }
@@ -542,6 +803,8 @@ async function consumeFullStream(
     text.complete();
     msg.complete();
   } catch (err: any) {
+    clearInterval(heartbeat);
+    completeProgressThinking();
     thinking?.complete();
     if (err?.name === "AbortError" || err?.code === "ABORT_ERR") {
       text.complete();

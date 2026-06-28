@@ -59,10 +59,21 @@ function makeProductionAgentStore(projectId: string) {
     const flowData = ref<FlowData>({
       script: "", // 剧本
       scriptPlan: "", //导演计划
+      shotPlan: null,
+      shotPolicy: null,
+      targetDuration: null,
+      targetDurationSource: null,
+      scriptTargetDuration: null,
+      scriptTargetDurationSource: null,
+      scriptTargetDurationRaw: null,
       storyboardTable: "", //分镜表
       assets: [], // 衍生资产
       storyboard: [], //分镜面板
       workbench: {
+        name: "",
+        duration: "",
+        resolution: "",
+        fps: "",
         videoList: [],
       }, // 工作台数据
     });
@@ -158,31 +169,39 @@ function makeProductionAgentStore(projectId: string) {
       (s) => {
         if (s) {
           s.on("connect", () => {
-            getHistory();
+            getHistory({ onlyWhenEmpty: true });
           });
           s.on("getFlowData", async ({ key }, callback) => {
-            if (key === "storyboard" && flowData.value.storyboard.some((item) => item.shouldGenerateImage && !item.id)) {
-              await getFlowData();
-            }
-            const returnData = JSON.parse(JSON.stringify(flowData.value));
-            returnData.assets.forEach((item: any) => {
-              delete item.prompt;
-              delete item.flowId;
-              delete item.src;
-              if (item.derive && item.derive.length) {
-                item.derive.forEach((deriveItem: any) => {
-                  delete deriveItem.prompt;
-                  delete deriveItem.flowId;
-                  delete deriveItem.src;
-                });
+            try {
+              if (key === "storyboard" && flowData.value.storyboard.some((item) => item.shouldGenerateImage && !item.id)) {
+                await getFlowData();
               }
-            });
-            returnData.storyboard.forEach((item: any) => {
-              delete item.prompt;
-              delete item.src;
-              delete item.flowId;
-            });
-            callback(returnData);
+              const returnData = JSON.parse(JSON.stringify(flowData.value));
+              returnData.assets.forEach((item: any) => {
+                delete item.prompt;
+                delete item.flowId;
+                delete item.src;
+                if (item.derive && item.derive.length) {
+                  item.derive.forEach((deriveItem: any) => {
+                    delete deriveItem.prompt;
+                    delete deriveItem.flowId;
+                    delete deriveItem.src;
+                  });
+                }
+              });
+              returnData.storyboard.forEach((item: any) => {
+                delete item.prompt;
+                delete item.src;
+                delete item.flowId;
+              });
+              callback?.(returnData);
+            } catch (error) {
+              console.error("[productionAgent] getFlowData callback failed", error);
+              callback?.({
+                ...flowData.value,
+                __error: error instanceof Error ? error.message : String(error),
+              });
+            }
           });
           s.on("addDeriveAsset", async (data, callback) => {
             const assets = flowData.value.assets.find((a) => a.id === data.assetsId);
@@ -223,7 +242,9 @@ function makeProductionAgentStore(projectId: string) {
             callback({ success: true, message: assetsData });
           });
           s.on("generateStoryboard", async (data, callback) => {
-            const storyData = await batchGenerateStoryboard(data.ids);
+            const storyData = await batchGenerateStoryboard(data.ids, {
+              usePreviousVideoTailFrame: Boolean(data?.usePreviousVideoTailFrame),
+            });
             callback({ success: true, message: storyData });
           });
           s.on("clearStoryboardPanel", async (data, callback) => {
@@ -241,11 +262,51 @@ function makeProductionAgentStore(projectId: string) {
               message: `已写入分镜表 ${data?.rowCount ?? 0} 行`,
             });
           });
-          s.on("setStoryboardPanel", async (data, callback) => {
-            await getFlowData();
+          s.on("setScriptPlan", async (data, callback) => {
+            const targetEpisodesId = Number(data?.scriptId);
+            const currentEpisodesId = Number(episodesId.value);
+            if (!Number.isFinite(targetEpisodesId) || targetEpisodesId !== currentEpisodesId) {
+              callback?.({
+                success: false,
+                message: `前端当前剧集 ${currentEpisodesId || "-"} 与写入剧集 ${targetEpisodesId || "-"} 不一致，未刷新导演计划`,
+              });
+              return;
+            }
+            flowData.value.scriptPlan = data?.scriptPlan ?? "";
             callback?.({
               success: true,
-              message: `已写入分镜面板 ${data?.insertedCount ?? 0} 条`,
+              message: `已写入导演计划 ${String(data?.scriptPlan ?? "").length} 字`,
+            });
+          });
+          s.on("setShotPlan", async (data, callback) => {
+            flowData.value.shotPlan = data?.shotPlan ?? null;
+            flowData.value.targetDuration = Number.isFinite(Number(data?.targetDuration)) ? Number(data.targetDuration) : null;
+            flowData.value.targetDurationSource = data?.targetDurationSource ?? data?.shotPlan?.targetDurationSource ?? null;
+            flowData.value.scriptTargetDuration = data?.scriptTargetDuration ?? flowData.value.scriptTargetDuration ?? null;
+            flowData.value.scriptTargetDurationSource = data?.scriptTargetDurationSource ?? flowData.value.scriptTargetDurationSource ?? null;
+            flowData.value.scriptTargetDurationRaw = data?.scriptTargetDurationRaw ?? flowData.value.scriptTargetDurationRaw ?? null;
+            callback?.({
+              success: true,
+              message: `已写入镜头规划 ${data?.shotCount ?? 0} 个镜头`,
+            });
+          });
+          s.on("setStoryboardPanel", async (data, callback) => {
+            const targetEpisodesId = Number(data?.scriptId);
+            const currentEpisodesId = Number(episodesId.value);
+            if (!Number.isFinite(targetEpisodesId) || targetEpisodesId !== currentEpisodesId) {
+              callback?.({
+                success: false,
+                message: `前端当前剧集 ${currentEpisodesId || "-"} 与写入剧集 ${targetEpisodesId || "-"} 不一致，未刷新分镜面板`,
+                storyboardCount: flowData.value.storyboard.length,
+              });
+              return;
+            }
+            const latestFlowData = await getFlowData(targetEpisodesId);
+            const storyboardCount = latestFlowData?.storyboard?.length ?? flowData.value.storyboard.length;
+            callback?.({
+              success: storyboardCount > 0,
+              message: storyboardCount > 0 ? `已刷新分镜面板 ${storyboardCount} 条` : "分镜面板刷新后仍为空",
+              storyboardCount,
             });
           });
         }
@@ -261,14 +322,15 @@ function makeProductionAgentStore(projectId: string) {
       });
     }
 
-    async function getFlowData() {
+    async function getFlowData(targetEpisodesId = episodesId.value) {
       const { data } = await axios.post("/production/getFlowData", {
         projectId: projectId,
-        episodesId: episodesId.value,
+        episodesId: targetEpisodesId,
       });
       flowData.value = data;
+      return data;
     }
-    async function batchGenerateStoryboard(allIds: number[]) {
+    async function batchGenerateStoryboard(allIds: number[], options: { usePreviousVideoTailFrame?: boolean } = {}) {
       const uniqueIds = Array.from(new Set(allIds.filter((id): id is number => Number.isInteger(id))));
       if (!uniqueIds.length) return [];
       flowData.value.storyboard.forEach((item) => {
@@ -284,6 +346,7 @@ function makeProductionAgentStore(projectId: string) {
         projectId: projectId,
         storyboardIds: uniqueIds,
         concurrentCount: settingStore().otherSetting.assetsBatchGenereateSize,
+        usePreviousVideoTailFrame: Boolean(options.usePreviousVideoTailFrame),
       });
         if (data) {
           if (flowData.value.storyboard.length === 0) {
@@ -305,6 +368,7 @@ function makeProductionAgentStore(projectId: string) {
             });
           }
         }
+      startStoryboardPolling();
       return data;
     }
     async function batchGenerateAssets(allIds: number[]) {
@@ -527,18 +591,74 @@ function makeProductionAgentStore(projectId: string) {
     }
 
     const loadingHistory = ref(false);
-    async function getHistory() {
-      loadingHistory.value = true;
-      const { data } = await axios.post(`/agents/getMemory`, {
-        projectId: projectId,
-        episodesId: episodesId.value,
-        agentType: "productionAgent",
+    type GetHistoryOptions = {
+      /**
+       * Socket reconnects should not overwrite an existing local conversation.
+       * The production page still calls getHistory() explicitly when switching episodes.
+       */
+      onlyWhenEmpty?: boolean;
+      force?: boolean;
+    };
+
+    function isGeneratingStatus(value: unknown) {
+      return value === "pending" || value === "streaming";
+    }
+
+    function hasConversationMessages() {
+      return messages.value.some((message: any) => message?.id !== "welcome");
+    }
+
+    function hasActiveConversationMessage() {
+      if (isGeneratingStatus(status.value)) return true;
+      return messages.value.some((message: any) => {
+        if (isGeneratingStatus(message?.status)) return true;
+        if (!Array.isArray(message?.content)) return false;
+        return message.content.some((content: any) => isGeneratingStatus(content?.status));
       });
-      messages.value = [];
-      messages.value = [...defMsg, ...data];
-      currentMessageId.value = null;
-      status.value = "idle";
-      loadingHistory.value = false;
+    }
+
+    async function getHistory(options: GetHistoryOptions = {}) {
+      const { onlyWhenEmpty = false, force = false } = options;
+      if (!force) {
+        if (loadingHistory.value) return;
+        if (onlyWhenEmpty && hasConversationMessages()) return;
+        if (hasActiveConversationMessage()) return;
+      }
+
+      loadingHistory.value = true;
+      try {
+        const { data } = await axios.post(`/agents/getMemory`, {
+          projectId: projectId,
+          episodesId: episodesId.value,
+          agentType: "productionAgent",
+        });
+        if (!force) {
+          if (onlyWhenEmpty && hasConversationMessages()) return;
+          if (hasActiveConversationMessage()) return;
+        }
+        messages.value = [...defMsg, ...(Array.isArray(data) ? data : [])];
+        currentMessageId.value = null;
+        status.value = "idle";
+      } finally {
+        loadingHistory.value = false;
+      }
+    }
+
+    async function clearCurrentEpisodeContent() {
+      const currentEpisodesId = Number(episodesId.value);
+      if (!Number.isInteger(currentEpisodesId) || currentEpisodesId <= 0) {
+        throw new Error("缺少当前分集，无法清空视频生产内容");
+      }
+      stopAssetsPolling();
+      stopStoryboardPolling();
+      const res = await axios.post("/production/clearEpisodeContent", {
+        projectId: Number(projectId),
+        episodesId: currentEpisodesId,
+        clearAgentMemory: true,
+      });
+      await getFlowData(currentEpisodesId);
+      await getHistory({ force: true });
+      return res.data;
     }
 
     const thinkLevel = ref(0);
@@ -570,6 +690,7 @@ function makeProductionAgentStore(projectId: string) {
       reconnect,
       thinkLevel,
       updateThinkConfig,
+      clearCurrentEpisodeContent,
     };
   });
 }

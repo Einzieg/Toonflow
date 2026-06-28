@@ -213,27 +213,45 @@ export function useChat(options: UseChatOptions) {
     const escapedTag = escapeRegExp(tag);
     // Match opening tag with optional attributes: <tag> or <tag attr="val">
     const openRegex = new RegExp(`<${escapedTag}(\\s[^>]*)?>`, "g");
-    let lastMatch: RegExpExecArray | null = null;
+    let lastComplete:
+      | {
+          value: string;
+          attrs: Record<string, string>;
+          children: XmlChildItem[];
+          isComplete: boolean;
+        }
+      | null = null;
+    let lastIncomplete:
+      | {
+          value: string;
+          attrs: Record<string, string>;
+          children: XmlChildItem[];
+          isComplete: boolean;
+        }
+      | null = null;
     let m: RegExpExecArray | null;
     while ((m = openRegex.exec(text)) !== null) {
-      lastMatch = m;
+      const attrs = parseXmlAttributes(m[1] ?? "");
+      const contentStart = m.index + m[0].length;
+      const closeTag = `</${tag}>`;
+      const closeIndex = text.indexOf(closeTag, contentStart);
+      const isComplete = closeIndex !== -1;
+      const value = text.slice(contentStart, isComplete ? closeIndex : text.length).trim();
+      const parsed = {
+        value,
+        attrs,
+        children: parseXmlChildren(value),
+        isComplete,
+      };
+
+      if (isComplete) {
+        lastComplete = parsed;
+      } else {
+        lastIncomplete = parsed;
+      }
     }
-    if (!lastMatch) return null;
 
-    const attrs = parseXmlAttributes(lastMatch[1] ?? "");
-    const contentStart = lastMatch.index + lastMatch[0].length;
-    const closeTag = `</${tag}>`;
-    const closeIndex = text.indexOf(closeTag, contentStart);
-    const isComplete = closeIndex !== -1;
-    const value = text.slice(contentStart, isComplete ? closeIndex : text.length).trim();
-    const children = parseXmlChildren(value);
-
-    return {
-      value,
-      attrs,
-      children,
-      isComplete,
-    };
+    return lastComplete ?? lastIncomplete;
   };
 
   const stripXmlFromMessage = (text: string) => {
@@ -241,9 +259,26 @@ export function useChat(options: UseChatOptions) {
 
     for (const tag of hiddenXmlTags) {
       const escapedTag = escapeRegExp(tag);
-      // Match tags with or without attributes
-      sanitized = sanitized.replace(new RegExp(`<${escapedTag}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${escapedTag}>`, "g"), "");
-      sanitized = sanitized.replace(new RegExp(`<${escapedTag}(?:\\s[^>]*)?>[\\s\\S]*$`, "g"), "");
+      const openRegex = new RegExp(`<${escapedTag}(?:\\s[^>]*)?>`, "g");
+      const closeTag = `</${tag}>`;
+      let result = "";
+      let cursor = 0;
+      let match: RegExpExecArray | null;
+
+      while ((match = openRegex.exec(sanitized)) !== null) {
+        const start = match.index;
+        const prevChar = start > 0 ? sanitized[start - 1] : "";
+        if (prevChar === "`") continue;
+
+        const contentStart = start + match[0].length;
+        const closeIndex = sanitized.indexOf(closeTag, contentStart);
+        result += sanitized.slice(cursor, start);
+        cursor = closeIndex === -1 ? sanitized.length : closeIndex + closeTag.length;
+        openRegex.lastIndex = cursor;
+      }
+
+      result += sanitized.slice(cursor);
+      sanitized = result;
     }
 
     return sanitized;
@@ -280,6 +315,7 @@ export function useChat(options: UseChatOptions) {
       if (parsed === null) continue;
 
       const { value, isComplete } = parsed;
+      if (!isComplete && isTerminalStatus(status)) continue;
       const eventStatus = isComplete ? (status === "error" || status === "stop" ? status : "complete") : status;
 
       const shouldEmit = prevState[tag] !== value || eventStatus === "complete";
@@ -480,8 +516,12 @@ export function useChat(options: UseChatOptions) {
       }
 
       if (data.role === "assistant") {
-        currentMessageId.value = data.id;
-        status.value = data.status === "streaming" ? "streaming" : "pending";
+        if (isTerminalStatus(data.status)) {
+          markMessageTerminal(data.id, data.status);
+        } else {
+          currentMessageId.value = data.id;
+          status.value = data.status === "streaming" ? "streaming" : "pending";
+        }
       }
     });
 
@@ -572,6 +612,10 @@ export function useChat(options: UseChatOptions) {
     // 错误处理
     socket.value.on("error", (error: { code: string; message: string }) => {
       console.error("[Chat Error]", error);
+      const id = currentMessageId.value;
+      if (id) markMessageTerminal(id, "error");
+      currentMessageId.value = null;
+      status.value = "idle";
       onError?.(error);
     });
 
@@ -686,12 +730,7 @@ export function useChat(options: UseChatOptions) {
     if (!id) return false;
 
     // 立即更新本地状态，不等服务端响应
-    const msg = findMessage(id);
-    if (msg) {
-      msg.status = "stop";
-    }
-    currentMessageId.value = null;
-    status.value = "idle";
+    markMessageTerminal(id, "stop");
 
     return emit("stop", { messageId: id });
   };

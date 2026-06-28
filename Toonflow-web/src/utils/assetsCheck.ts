@@ -10,6 +10,9 @@ interface Asset {
   describe: string;
   remark: string;
   volcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
   src: string;
   type: "role" | "tool" | "scene" | "clip";
   imageId: number | null;
@@ -90,7 +93,7 @@ export default function openAssetsSelector(options: AssetsSelectOptions = {}): P
               h(AssetsView, {
                 ref: assetsRef,
                 selectorMode: true,
-                allowedTypes: types,
+                allowedTypes: types?.filter((type): type is "role" | "tool" | "scene" | "clip" => type !== "audio"),
                 clipMediaTypes,
                 multiple,
               }),

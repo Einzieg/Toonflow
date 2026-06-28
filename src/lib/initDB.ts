@@ -446,6 +446,9 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.text("type");
         table.text("describe");
         table.text("volcengineAssetUri");
+        table.text("voiceProfile");
+        table.text("voiceTone");
+        table.text("speechRate");
         table.integer("scriptId"); //剧本id
         table.integer("imageId").unsigned().references("id").inTable("o_image");
         table.integer("assetsId");
@@ -483,12 +486,18 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.integer("scriptId");
         table.text("prompt");
         table.text("filePath");
+        table.text("gridImagePath");
+        table.text("gridImagePrompt");
+        table.text("gridImageState");
+        table.text("gridImageReason");
+        table.integer("gridImageFlowId");
         table.text("duration");
         table.text("state");
         table.integer("trackId");
         table.text("reason");
         table.text("track");
         table.text("videoDesc");
+        table.text("shotMeta");
         table.integer("shouldGenerateImage"); // 0 否  1 是
         table.integer("projectId");
         table.integer("flowId"); //工作流id
@@ -520,6 +529,11 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.integer("targetDuration");
         table.text("sourceType");
         table.text("sourceHash");
+        table.text("videoReferencePath");
+        table.text("videoReferenceMode");
+        table.text("frameManifest");
+        table.text("shotTimeline");
+        table.text("lockedNarrative");
         table.text("state");
         table.text("errorReason");
         table.integer("createTime");
@@ -602,6 +616,9 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.text("imageSourceHash");
         table.text("assetHash");
         table.text("referenceSnapshot");
+        table.text("videoReferencePath");
+        table.text("videoReferenceMode");
+        table.text("frameManifest");
         table.integer("version");
         table.integer("isCurrent");
         table.integer("invalidatedAt");
@@ -677,6 +694,7 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.text("localSaveErrorReason");
         table.text("externalTaskId");
         table.text("errorReason");
+        table.text("prompt");
         table.integer("time");
         table.text("state");
         table.integer("scriptId");
@@ -697,10 +715,29 @@ export default async (knex: Knex, forceInit: boolean = false): Promise<void> => 
         table.text("state");
         table.text("reason");
         table.text("prompt");
+        table.text("referenceMediaOverride");
         table.integer("selectVideoId");
         table.integer("duration");
         table.primary(["id"]);
         table.unique(["id"]);
+      },
+    },
+    // 视频轨道合并快照，用于取消合并时恢复分镜和视频归属
+    {
+      name: "o_videoTrackMergeSnapshot",
+      builder: (table) => {
+        table.integer("id").notNullable();
+        table.integer("projectId");
+        table.integer("scriptId");
+        table.integer("targetTrackId");
+        table.integer("sourceTrackId");
+        table.text("storyboards");
+        table.text("videoIds");
+        table.text("trackData");
+        table.integer("createTime");
+        table.primary(["id"]);
+        table.unique(["id"]);
+        table.index(["projectId", "scriptId", "targetTrackId"]);
       },
     },
     //供应商配置表

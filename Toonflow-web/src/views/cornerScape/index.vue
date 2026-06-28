@@ -24,6 +24,12 @@
           </t-form-item>
           <t-form-item :label="$t('workbench.cornerScape.assetTypeFilter')">
             <t-checkbox-group @change="onChangeFn" v-model="checkboxValue" :options="translatedOptions" class="filterGroup" />
+            <div class="batchPresetBar">
+              <t-button size="small" theme="primary" variant="outline" @click="selectYaoyanRolePromptBatch">
+                {{ batchPromptPreset === "yaoyan" ? "取消妖艳批量预设" : "选择妖艳女性角色" }}
+              </t-button>
+              <t-tag v-if="batchPromptPreset === 'yaoyan'" size="small" theme="warning" variant="light">批量预设：妖艳</t-tag>
+            </div>
           </t-form-item>
 
           <t-form-item :label="$t('workbench.cornerScape.genModel')">
@@ -159,7 +165,7 @@
             <span class="generatingText">{{ $t("workbench.cornerScape.generating") }}</span>
           </div>
           <t-empty v-else-if="currentItem.state === '生成失败'" type="fail" :title="$t('workbench.cornerScape.genFailed')" />
-          <t-image v-else-if="currentItem.filePath" class="image" :src="getAssetThumbSrc(currentItem)" fit="contain">
+          <t-image v-else-if="currentItem.filePath" :key="currentItem.imageId || currentItem.filePath" class="image" :src="getAssetThumbSrc(currentItem)" fit="contain">
             <template #error>
               <t-empty type="fail" :title="$t('workbench.cornerScape.imageError')" />
             </template>
@@ -181,6 +187,15 @@
                 :class="{ selected: selectedHistoryId === item.id }"
                 @click.stop="toggleHistorySelect(item.id)">
                 <t-image :src="item.thumbSrc || item.filePath" :style="{ width: '100px', minWidth: '100px', height: '100px' }" :lazy="true" fit="contain" />
+                <t-button
+                  class="historyDeleteButton"
+                  size="small"
+                  shape="circle"
+                  theme="danger"
+                  variant="base"
+                  @click.stop="deleteHistoryImage(item.id)">
+                  <template #icon><t-icon name="delete" /></template>
+                </t-button>
               </div>
             </div>
           </t-form-item>
@@ -189,6 +204,24 @@
           </t-form-item>
           <t-form-item :label="$t('workbench.cornerScape.resolution')">
             <t-select v-model="editForm.resolution" :placeholder="$t('workbench.cornerScape.resolutionPh')" :options="resolutionOptions" />
+          </t-form-item>
+          <t-form-item v-if="showFemaleRolePromptPresets" label="女性提示词选项">
+            <div class="rolePromptPresetBox">
+              <div class="presetButtons">
+                <t-button
+                  v-for="preset in rolePromptPresets"
+                  :key="preset.key"
+                  size="small"
+                  :theme="selectedRolePromptPreset === preset.key ? 'primary' : 'default'"
+                  :variant="selectedRolePromptPreset === preset.key ? 'base' : 'outline'"
+                  @click="applyRolePromptPreset(preset.key)">
+                  {{ preset.label }}
+                </t-button>
+              </div>
+              <div v-if="selectedRolePromptPresetData" class="presetHint">
+                {{ selectedRolePromptPresetData.description }}
+              </div>
+            </div>
           </t-form-item>
           <t-form-item :label="$t('workbench.cornerScape.promptLabel')">
             <t-loading style="width: 100%" :loading="currentItem.promptState == '生成中'">
@@ -251,10 +284,12 @@ interface Image {
   filePath: string;
   thumbSrc?: string | null;
   id: number;
+  model?: string | null;
+  resolution?: string | null;
 }
 interface DataItem {
   id: number;
-  imageId: number;
+  imageId: number | null;
   type: string;
   name: string;
   prompt: string;
@@ -274,7 +309,11 @@ interface DataItem {
 const checkboxValue = ref<string[]>([]);
 const { project } = storeToRefs(projectStore());
 const selectValue = ref(project.value?.imageModel ?? "");
-const resolution = ref("1K");
+function getDefaultImageResolution(value?: string | null) {
+  return value || project.value?.imageQuality || "1K";
+}
+
+const resolution = ref(getDefaultImageResolution());
 const resolutionOptions = [
   { label: "1K", value: "1K" },
   { label: "2K", value: "2K" },
@@ -339,7 +378,10 @@ async function getFilteredData() {
   }
 }
 
+type RolePromptPresetKey = "yaoyan";
+
 const selectedIds = ref<number[]>([]);
+const batchPromptPreset = ref<RolePromptPresetKey | "">("");
 
 const previewImages = computed((): string[] => {
   const selectedImageList = dataList.value
@@ -381,6 +423,7 @@ const toggleSelect = (id: number) => {
 };
 
 const selectByState = (state: string) => {
+  batchPromptPreset.value = "";
   selectedIds.value = dataList.value.filter((item) => (state === "" ? !item.state : item.state === state)).map((item) => item.id);
 };
 //全选提示词为空的
@@ -390,11 +433,13 @@ function selectPromptEmpty() {
     window.$message.warning($t("workbench.cornerScape.noEmptyPrompt"));
     return;
   }
+  batchPromptPreset.value = "";
   selectedIds.value = lite;
   window.$message.success($t("workbench.cornerScape.selectedCount", { count: selectedIds.value.length }));
 }
 
 function toggleSelectAll() {
+  batchPromptPreset.value = "";
   if (selectedIds.value.length === dataList.value.length) {
     selectedIds.value = [];
   } else {
@@ -402,6 +447,7 @@ function toggleSelectAll() {
   }
 }
 function clearSelection() {
+  batchPromptPreset.value = "";
   selectedIds.value = [];
 }
 //取消生成
@@ -442,22 +488,134 @@ const drawerVisible = ref(false);
 const currentItem = ref<DataItem | null>(null);
 const selectedHistoryId = ref<number | null>(null);
 
+const rolePromptPresets: { key: RolePromptPresetKey; label: string; description: string }[] = [
+  {
+    key: "yaoyan",
+    label: "妖艳",
+    description: "成年女性，36D观感、带抹胸、外层低位浅V小开口、抹胸完整覆盖且上沿约三分之二处、大长腿笔直；服装冲突时按剧情服装。",
+  },
+];
+const selectedRolePromptPreset = ref<RolePromptPresetKey | "">("");
+const selectedRolePromptPresetData = computed(() => rolePromptPresets.find((preset) => preset.key === selectedRolePromptPreset.value));
+
+function isFemaleRole(item?: Pick<DataItem, "type" | "name" | "describe" | "prompt"> | null) {
+  if (!item || item.type !== "role") return false;
+  const text = `${item.name || ""} ${item.describe || ""} ${item.prompt || ""}`;
+  if (/女|女性|女人|少女|女子|女孩|女主|女王|公主|小姐|夫人|太后|皇后|妃|姬|娘|母|姐|妹/.test(text)) return true;
+  return !/男|男性|男人|少年|男子|男主|王爷|皇子|皇帝|父亲|哥哥|弟弟|老爷|公子/.test(text);
+}
+
+const showFemaleRolePromptPresets = computed(() => currentItem.value?.type === "role");
+
+function hasYaoyanPreset(item?: Pick<DataItem, "describe" | "prompt"> | null) {
+  const text = `${item?.describe || ""} ${item?.prompt || ""}`;
+  return text.includes("[女性风格预设: 妖艳]") || text.includes("风格补充：妖艳");
+}
+
+function stripYaoyanPresetText(text?: string | null) {
+  return String(text || "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) return false;
+      if (line.includes("[女性风格预设: 妖艳]")) return false;
+      if (line.startsWith("风格补充：妖艳")) return false;
+      if (line.startsWith("妖艳风格融合：")) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
+function selectYaoyanRolePromptBatch() {
+  if (batchPromptPreset.value === "yaoyan") {
+    batchPromptPreset.value = "";
+    selectedIds.value = [];
+    window.$message.success("已取消妖艳批量预设");
+    return;
+  }
+  const items = dataList.value.filter((item) => isFemaleRole(item));
+  if (!items.length) {
+    window.$message.warning("当前筛选结果中没有可应用妖艳预设的女性角色");
+    return;
+  }
+  selectedIds.value = items.map((item) => item.id);
+  batchPromptPreset.value = "yaoyan";
+  window.$message.success(`已选择 ${items.length} 个女性角色，批量生成提示词将按「妖艳」执行`);
+}
+
+async function clearRolePromptPreset() {
+  selectedRolePromptPreset.value = "";
+  const item = currentItem.value;
+  if (!item) return;
+
+  const nextDescribe = stripYaoyanPresetText(editForm.describe || item.describe);
+  const nextPrompt = stripYaoyanPresetText(editForm.prompt || item.prompt);
+  editForm.describe = nextDescribe;
+  editForm.prompt = nextPrompt;
+  item.describe = nextDescribe;
+  item.prompt = nextPrompt;
+
+  const target = dataList.value.find((row) => row.id === item.id);
+  if (target) {
+    target.describe = nextDescribe;
+    target.prompt = nextPrompt;
+  }
+
+  try {
+    await axios.post("/assets/saveAssets", {
+      id: item.id,
+      type: item.type,
+      projectId: project.value?.id,
+      prompt: nextPrompt,
+      describe: nextDescribe,
+    });
+    window.$message.success("已取消「妖艳」风格预设");
+  } catch {
+    window.$message.error("取消妖艳预设失败");
+  }
+}
+
+async function applyRolePromptPreset(key: RolePromptPresetKey) {
+  if (selectedRolePromptPreset.value === key) {
+    await clearRolePromptPreset();
+    return;
+  }
+  selectedRolePromptPreset.value = key;
+  const preset = rolePromptPresets.find((item) => item.key === key);
+  if (!preset) return;
+  window.$message.success(`已选择「${preset.label}」风格，生成提示词时会按该方向执行`);
+}
+
 async function toggleHistorySelect(id: number) {
   selectedHistoryId.value = selectedHistoryId.value === id ? null : id;
   if (!currentItem.value) return;
   const selectedImage = currentItem.value.historyImages.find((img) => img.id === selectedHistoryId.value);
+  if (!selectedImage) return;
   try {
     await axios.post("/assets/saveAssets", {
       id: currentItem.value.id,
       type: currentItem.value.type,
       projectId: project.value?.id,
       prompt: currentItem.value.prompt,
-      imageId: selectedImage?.id,
+      imageId: selectedImage.id,
     });
     //拿选中的图片替换当前图片
-    if (selectedImage) {
-      currentItem.value.filePath = selectedImage.filePath;
-      currentItem.value.state = "已完成";
+    currentItem.value.imageId = selectedImage.id;
+    currentItem.value.filePath = selectedImage.filePath;
+    currentItem.value.thumbSrc = selectedImage.thumbSrc || selectedImage.filePath;
+    currentItem.value.model = selectedImage.model || currentItem.value.model;
+    currentItem.value.resolution = getDefaultImageResolution(selectedImage.resolution || currentItem.value.resolution);
+    editForm.resolution = currentItem.value.resolution;
+    currentItem.value.state = "已完成";
+    const target = dataList.value.find((item) => item.id === currentItem.value!.id);
+    if (target) {
+      target.imageId = selectedImage.id;
+      target.filePath = selectedImage.filePath;
+      target.thumbSrc = selectedImage.thumbSrc || selectedImage.filePath;
+      target.model = currentItem.value.model;
+      target.resolution = currentItem.value.resolution;
+      target.state = "已完成";
     }
     getFilteredData();
     window.$message.success($t("workbench.cornerScape.msg.replaceSuccess"));
@@ -467,11 +625,84 @@ async function toggleHistorySelect(id: number) {
   }
 }
 
+async function deleteHistoryImage(imageId: number) {
+  if (!currentItem.value) return;
+  const image = currentItem.value.historyImages.find((item) => item.id === imageId);
+  if (!image) return;
+
+  const dialog = DialogPlugin.confirm({
+    header: "删除历史图片",
+    body: "确认删除这张历史图片？如果它是当前预览图，将自动切换到剩余历史图。",
+    confirmBtn: "删除",
+    cancelBtn: "取消",
+    onConfirm: async () => {
+      try {
+        await axios.post("/assets/delImage", { id: imageId });
+        if (!currentItem.value) return;
+
+        const remainingImages = currentItem.value.historyImages.filter((item) => item.id !== imageId);
+        currentItem.value.historyImages = remainingImages;
+        const deletedCurrentImage = currentItem.value.imageId === imageId;
+
+        if (selectedHistoryId.value === imageId) {
+          selectedHistoryId.value = null;
+        }
+
+        if (deletedCurrentImage) {
+          const nextImage = remainingImages[0];
+          if (nextImage) {
+            await axios.post("/assets/saveAssets", {
+              id: currentItem.value.id,
+              type: currentItem.value.type,
+              projectId: project.value?.id,
+              prompt: currentItem.value.prompt,
+              imageId: nextImage.id,
+            });
+            selectedHistoryId.value = nextImage.id;
+            currentItem.value.imageId = nextImage.id;
+            currentItem.value.filePath = nextImage.filePath;
+            currentItem.value.thumbSrc = nextImage.thumbSrc || nextImage.filePath;
+            currentItem.value.model = nextImage.model || currentItem.value.model;
+            currentItem.value.resolution = getDefaultImageResolution(nextImage.resolution || currentItem.value.resolution);
+            editForm.resolution = currentItem.value.resolution;
+            currentItem.value.state = "已完成";
+          } else {
+            currentItem.value.imageId = null;
+            currentItem.value.filePath = "";
+            currentItem.value.thumbSrc = "";
+            currentItem.value.resolution = getDefaultImageResolution(editForm.resolution);
+            editForm.resolution = currentItem.value.resolution;
+            currentItem.value.state = "";
+          }
+        }
+
+        const target = dataList.value.find((item) => item.id === currentItem.value!.id);
+        if (target) {
+          target.historyImages = remainingImages;
+          target.imageId = currentItem.value.imageId;
+          target.filePath = currentItem.value.filePath;
+          target.thumbSrc = currentItem.value.thumbSrc;
+          target.model = currentItem.value.model;
+          target.resolution = currentItem.value.resolution;
+          target.state = currentItem.value.state;
+        }
+
+        await getFilteredData();
+        window.$message.success("历史图片已删除");
+      } catch (e: any) {
+        window.$message.error(e?.message || "删除历史图片失败");
+      } finally {
+        dialog.destroy();
+      }
+    },
+  });
+}
+
 const editForm = reactive({
   assetsId: 0,
   model: "",
   type: "",
-  resolution: "",
+  resolution: getDefaultImageResolution(),
   prompt: "",
   name: "",
   describe: "",
@@ -487,11 +718,13 @@ async function openDrawer(item: DataItem) {
   editForm.type = item.type || "";
   editForm.model = item.model || "";
   currentItem.value = item;
-  editForm.resolution = item.resolution || "";
+  editForm.resolution = getDefaultImageResolution(item.resolution);
   editForm.prompt = item.prompt || "";
   editForm.describe = item.describe || "";
   editForm.promptState = item.promptState;
   editForm.relepedAudio = item?.relepedAudio ?? [];
+  selectedRolePromptPreset.value = hasYaoyanPreset(item) ? "yaoyan" : "";
+  selectedHistoryId.value = item.imageId ?? null;
 
   drawerVisible.value = true;
   // 重新获取最新数据（含历史图片）
@@ -508,7 +741,10 @@ async function openDrawer(item: DataItem) {
       // 更新当前抽屉项
       currentItem.value = freshItem;
       editForm.prompt = freshItem.prompt || editForm.prompt;
-      editForm.resolution = freshItem.resolution || editForm.resolution;
+      editForm.describe = freshItem.describe || editForm.describe;
+      editForm.resolution = getDefaultImageResolution(freshItem.resolution || editForm.resolution);
+      selectedRolePromptPreset.value = hasYaoyanPreset(freshItem) ? "yaoyan" : selectedRolePromptPreset.value;
+      selectedHistoryId.value = freshItem.imageId ?? selectedHistoryId.value;
     }
   } catch (e) {
     console.error("刷新资产详情失败:", e);
@@ -592,7 +828,7 @@ async function savePromptOnBlur() {
 // AI 润色
 const polishing = ref(false);
 async function polishPrompts() {
-  if (!editForm.prompt.trim()) {
+  if (!editForm.prompt.trim() && !selectedRolePromptPreset.value) {
     window.$message.warning($t("workbench.cornerScape.msg.enterPromptFirst"));
     return;
   }
@@ -604,10 +840,22 @@ async function polishPrompts() {
       type: editForm.type ?? "props",
       name: editForm.name,
       describe: editForm.describe,
+      prompt: editForm.prompt,
+      promptPreset: selectedRolePromptPreset.value || undefined,
     });
     window.$message.success($t("workbench.cornerScape.msg.promptGenSuccess"));
     if (data.assetsId === editForm.assetsId) {
       editForm.prompt = data.prompt;
+      if (data.describe) editForm.describe = data.describe;
+      if (currentItem.value) {
+        currentItem.value.prompt = data.prompt;
+        if (data.describe) currentItem.value.describe = data.describe;
+      }
+      const target = dataList.value.find((item) => item.id === data.assetsId);
+      if (target) {
+        target.prompt = data.prompt;
+        if (data.describe) target.describe = data.describe;
+      }
     }
     getFilteredData();
   } catch {
@@ -624,6 +872,7 @@ async function batchGenerationPrompt() {
   }
 
   const items = dataList.value.filter((item) => selectedIds.value.includes(item.id));
+  const promptPreset = batchPromptPreset.value;
 
   // 前端先将所有选中项的 promptState 标记为"生成中"，让轮询自动接管状态跟踪
   items.forEach((item) => {
@@ -632,6 +881,7 @@ async function batchGenerationPrompt() {
 
   // 清除已选中的项
   selectedIds.value = [];
+  batchPromptPreset.value = "";
 
   try {
     await axios.post("/assetsGenerate/batchPolishAssetsPrompt", {
@@ -640,7 +890,9 @@ async function batchGenerationPrompt() {
         assetsId: item.id,
         type: item.type ?? "props",
         name: item.name,
-        describe: item.describe,
+        describe: item.describe || "",
+        prompt: item.prompt || "",
+        promptPreset: (promptPreset === "yaoyan" && isFemaleRole(item)) || hasYaoyanPreset(item) ? "yaoyan" : undefined,
       })),
       concurrentCount: otherSetting.value.assetsBatchGenereateSize,
     });
@@ -781,7 +1033,13 @@ async function pollingPromptAssets() {
         // 同步更新抽屉中的当前项
         if (currentItem.value) {
           const freshCurrent = (freshData as DataItem[]).find((d) => d.id === currentItem.value!.id);
-          if (freshCurrent) currentItem.value = freshCurrent;
+          if (freshCurrent) {
+            currentItem.value = freshCurrent;
+            editForm.prompt = freshCurrent.prompt || editForm.prompt;
+            editForm.describe = freshCurrent.describe || editForm.describe;
+            editForm.promptState = freshCurrent.promptState;
+            selectedRolePromptPreset.value = hasYaoyanPreset(freshCurrent) ? "yaoyan" : selectedRolePromptPreset.value;
+          }
         }
       } catch (e) {
         console.error("刷新历史图片失败:", e);
@@ -956,6 +1214,13 @@ async function selectAudio() {
       display: flex;
       flex-direction: column;
       gap: 8px;
+    }
+    .batchPresetBar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
     }
   }
   .content {
@@ -1167,6 +1432,7 @@ async function selectAudio() {
 }
 
 .historyImageItem {
+  position: relative;
   border-radius: 4px;
   border: 3px solid transparent;
   cursor: pointer;
@@ -1180,6 +1446,42 @@ async function selectAudio() {
   &.selected {
     border-color: var(--td-brand-color);
   }
+  &:hover .historyDeleteButton,
+  &.selected .historyDeleteButton {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.historyDeleteButton {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
+}
+
+.rolePromptPresetBox {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--td-component-border);
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+}
+
+.presetButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.presetHint {
+  margin-top: 8px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .drawerActions {

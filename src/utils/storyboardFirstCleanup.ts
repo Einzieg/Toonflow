@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import u from "@/utils";
+import { cleanupStoryboardVideoReferenceFiles } from "@/utils/storyboardVideoReference";
 
 async function deleteOssFileIfExists(filePath?: string | null) {
   const normalized = String(filePath || "").trim();
@@ -55,6 +56,10 @@ export async function cleanupStoryboardFirstImagesByIds(firstImageIds: number[])
     images.flatMap((image: any) => [
       deleteOssFileIfExists(image.filePath),
       deleteOssFileIfExists(image.thumbPath),
+      cleanupStoryboardVideoReferenceFiles({
+        videoReferencePath: image.videoReferencePath,
+        frameManifest: image.frameManifest,
+      }),
     ]),
   );
   await u.db("o_storyboardFirstImage").whereIn("id", imageIds).delete();

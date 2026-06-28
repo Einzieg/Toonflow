@@ -17,7 +17,7 @@ export default defineStore(
     const otherSetting = ref({
       axiosTimeOut: 60 * 10 * 1000,
       assetsBatchGenereateSize: 10,
-      chapterReg: "/第\\s*([0-9０-９零一二三四五六七八九十百千万]+)\\s*[章回节]\\s*([^\\n\\r]*)/g",
+      chapterReg: "/^\\s*第\\s*([0-9０-９零〇一二三四五六七八九十百千万两]+)\\s*[章回节集](?:\\s*[：:、.．\\\\-—]\\s*|\\s+|$)([^\\n\\r]*)$/gm",
       interacting: true,
       scriptEpisodeLength: 5000,
     });

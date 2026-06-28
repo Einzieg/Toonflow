@@ -29,9 +29,9 @@
       </t-chat-list>
       <t-chat-sender
         class="inputBox"
-        :disabled="status === 'pending' || status === 'streaming' || !connected"
+        :disabled="clearingEpisodeContent || status === 'pending' || status === 'streaming' || !connected"
         v-model="inputValue"
-        :loading="status === 'pending' || status === 'streaming'"
+        :loading="clearingEpisodeContent || status === 'pending' || status === 'streaming'"
         :placeholder="$t('workbench.production.chatBox.inputPlaceholder')"
         @send="handleSend"
         @stop="handleStop">
@@ -65,7 +65,7 @@
               </template>
             </t-popup>
             <t-popup trigger="click" placement="top" v-if="showThink">
-              <t-button size="small" variant="outline" :theme="['default', 'success', 'warning', 'danger'][thinkLevel] || 'default'">
+              <t-button size="small" variant="outline" :theme="getThinkLevelTheme(thinkLevel)">
                 <template #icon>
                   <i-tips size="16" />
                 </template>
@@ -105,12 +105,16 @@ const thinkLevelOptions = [
   { label: $t("workbench.scriptAgent.thinkLevel.deep"), value: 2 },
   { label: $t("workbench.scriptAgent.thinkLevel.extreme"), value: 3 },
 ];
+function getThinkLevelTheme(level: number): "default" | "success" | "warning" | "danger" {
+  return (["default", "success", "warning", "danger"] as const)[level] || "default";
+}
 
 const props = defineProps({ title: String });
 
 const emit = defineEmits(["close"]);
 
 const inputValue = ref("");
+const clearingEpisodeContent = ref(false);
 
 function handleSend(text: string) {
   productionAgentStore().chat(text);
@@ -134,9 +138,49 @@ function handleReconnect() {
 }
 
 //快捷发送
+function buildSuggestionPrompt(data?: any) {
+  const prompt = String(data?.content?.prompt || "");
+  const title = String(data?.content?.title || "");
+  if (title === $t("workbench.production.chatBox.startMakingVideo") && !/(自动推进|自动审查|完整制作|auto)/i.test(prompt)) {
+    return `${prompt}\n\n默认进入自动推进模式：由你完成自动审查、自动修复和下一步推进；除非遇到必须人工决定的问题，否则不要停下来询问确认，持续执行到分镜图生成任务启动。`;
+  }
+  return prompt;
+}
+
+function isStartMakingVideoSuggestion(data?: any) {
+  return String(data?.content?.title || "") === $t("workbench.production.chatBox.startMakingVideo");
+}
+
+function getErrorMessage(error: any) {
+  return error?.response?.data?.message || error?.response?.data?.msg || error?.message || String(error || "");
+}
+
+async function handleStartMakingVideo(prompt: string) {
+  if (clearingEpisodeContent.value) return;
+  if (status.value === "pending" || status.value === "streaming") {
+    window.$message.warning("当前 Agent 正在执行，请先停止或等待完成后再重新开始制作视频。");
+    return;
+  }
+  clearingEpisodeContent.value = true;
+  try {
+    window.$message.info("正在清空当前分集的视频生产内容...");
+    await productionAgentStore().clearCurrentEpisodeContent();
+    productionAgentStore().chat(prompt);
+  } catch (error) {
+    window.$message.error(`清空当前分集失败：${getErrorMessage(error)}`);
+  } finally {
+    clearingEpisodeContent.value = false;
+  }
+}
+
 const handleActions = {
-  suggestion: (data?: any) => {
-    productionAgentStore().chat(data?.content?.prompt);
+  suggestion: async (data?: any) => {
+    const prompt = buildSuggestionPrompt(data);
+    if (isStartMakingVideoSuggestion(data)) {
+      await handleStartMakingVideo(prompt);
+      return;
+    }
+    productionAgentStore().chat(prompt);
   },
 };
 

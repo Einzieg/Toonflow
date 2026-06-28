@@ -16,15 +16,21 @@ export default router.post(
     remark: z.string().optional().nullable(),
     prompt: z.string().optional().nullable(),
     volcengineAssetUri: z.string().optional().nullable(),
+    voiceProfile: z.string().optional().nullable(),
+    voiceTone: z.string().optional().nullable(),
+    speechRate: z.string().optional().nullable(),
   }),
   async (req, res) => {
-    const { id, name, describe, remark, prompt, volcengineAssetUri } = req.body;
+    const { id, name, describe, remark, prompt, volcengineAssetUri, voiceProfile, voiceTone, speechRate } = req.body;
     await u.db("o_assets").where({ id }).update({
       name,
       describe,
       remark,
       prompt,
       volcengineAssetUri: volcengineAssetUri?.trim() || null,
+      voiceProfile: voiceProfile?.trim() || null,
+      voiceTone: voiceTone?.trim() || null,
+      speechRate: speechRate?.trim() || null,
     });
     res.status(200).send(success({ message: "更新资产成功" }));
   },

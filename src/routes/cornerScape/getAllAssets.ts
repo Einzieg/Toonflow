@@ -47,7 +47,11 @@ export default router.post(
     });
     const result = await Promise.all(
       data.map(async (parent: any) => {
-        const historyImages = await u.db("o_image").where("assetsId", parent.id).andWhere("state", "已完成").select("id", "filePath");
+        const historyImages = await u
+          .db("o_image")
+          .where("assetsId", parent.id)
+          .andWhere("state", "已完成")
+          .select("id", "filePath", "model", "resolution");
         const historyImagesWithUrl = await Promise.all(
           historyImages.map(async (img: any) => {
             const filePath = img.filePath ? await u.oss.getFileUrl(img.filePath) : "";
@@ -55,6 +59,8 @@ export default router.post(
               id: img.id,
               filePath,
               thumbSrc: img.filePath ? await u.oss.getSmallImageUrl(img.filePath) : "",
+              model: img.model,
+              resolution: img.resolution,
             };
           }),
         );

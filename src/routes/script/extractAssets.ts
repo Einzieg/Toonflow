@@ -40,17 +40,15 @@ type GroupResult = {
   existingRefs: ExistingAssetRef[];
 } | null;
 
-/** 将 scriptIds 数组按 groupSize 分组 */
-function chunkArray(arr: number[], groupSize: number): number[][][] {
-  const chunks: number[][] = [];
-  for (let i = 0; i < arr.length; i += 5) {
-    chunks.push(arr.slice(i, i + 5));
+const MAX_SCRIPTS_PER_ASSET_EXTRACTION = 5;
+
+/** 将 scriptIds 数组按固定小批次分组，避免单次上下文过长导致漏提资产 */
+function chunkArray(arr: number[], chunkSize = MAX_SCRIPTS_PER_ASSET_EXTRACTION): number[][] {
+  const groups: number[][] = [];
+  for (let i = 0; i < arr.length; i += chunkSize) {
+    groups.push(arr.slice(i, i + chunkSize));
   }
-  const groupChunks = [];
-  for (let i = 0; i < chunks.length; i += groupSize) {
-    groupChunks.push(chunks.slice(i, i + groupSize));
-  }
-  return groupChunks;
+  return groups;
 }
 
 export default router.post(
@@ -61,7 +59,7 @@ export default router.post(
     groupSize: z.number().min(1).optional(),
   }),
   async (req, res) => {
-    const { scriptIds, projectId, groupSize = 5 } = req.body;
+    const { scriptIds, projectId } = req.body;
 
     if (!scriptIds.length) return res.status(400).send(error("请先选择剧本"));
     const scripts = await u.db("o_script").whereIn("id", scriptIds);
@@ -74,10 +72,9 @@ export default router.post(
     });
 
     const errors: { scriptId: number; error: string }[] = [];
-    let successCount = 0;
 
-    // 将 scriptIds 按 groupSize（默认5）分组，每组一起发给 AI
-    const scriptGroups = chunkArray(scriptIds as number[], groupSize);
+    // 前端的 groupSize 是其他批量生成参数，不能决定单次资产提取上下文大小。
+    const scriptGroups = chunkArray(scriptIds as number[]);
 
     /** 一组剧本提取完成后统一入库并建立关联 */
     async function persistGroupResult(result: GroupResult) {
@@ -109,13 +106,16 @@ export default router.post(
 
       // 收集所有资产与剧本的关联关系
       const scriptAssetRows: { scriptId: number; assetId: number }[] = [];
+      const validScriptIdSet = new Set(batchScriptIds.map((id) => Number(id)));
 
       // 新资产的关联
       for (const asset of newAssets) {
         const assetId = nameToId.get(asset.name);
         if (assetId) {
           for (const sid of asset.scriptIds) {
-            scriptAssetRows.push({ scriptId: sid, assetId });
+            if (validScriptIdSet.has(Number(sid))) {
+              scriptAssetRows.push({ scriptId: sid, assetId });
+            }
           }
         }
       }
@@ -125,7 +125,9 @@ export default router.post(
         const assetId = nameToId.get(ref.name);
         if (assetId) {
           for (const sid of ref.scriptIds) {
-            scriptAssetRows.push({ scriptId: sid, assetId });
+            if (validScriptIdSet.has(Number(sid))) {
+              scriptAssetRows.push({ scriptId: sid, assetId });
+            }
           }
         }
       }
@@ -135,11 +137,14 @@ export default router.post(
         ...new Map(scriptAssetRows.map((r) => [`${r.scriptId}_${r.assetId}`, r])).values(),
       ];
 
-
-      // 先删除本批 scriptId 的旧关联，再插入新的
-      await u.db("o_scriptAssets").whereIn("scriptId", batchScriptIds).delete();
+      // 增量补充关联，不能用一次 AI 提取结果覆盖整集资产，避免模型漏返回时清空旧关联。
       if (uniqueRows.length) {
-        await u.db("o_scriptAssets").insert(uniqueRows);
+        const existingRows = await u.db("o_scriptAssets").whereIn("scriptId", batchScriptIds).select("scriptId", "assetId");
+        const existingKeys = new Set(existingRows.map((r) => `${r.scriptId}_${r.assetId}`));
+        const rowsToInsert = uniqueRows.filter((r) => !existingKeys.has(`${r.scriptId}_${r.assetId}`));
+        if (rowsToInsert.length) {
+          await u.db("o_scriptAssets").insert(rowsToInsert);
+        }
       }
 
       // 本批成功的剧本状态更新为 1（成功）
@@ -150,110 +155,125 @@ export default router.post(
     }
     res.send(success("开始提取资产"));
 
-    function processGroup(group: number[][][]) {
-      group.map(async (itemIds) => {
-        const validScripts: { id: number; script: o_script }[] = [];
-        for (const scriptIds of itemIds as number[][]) {
-          for (const scriptId of scriptIds) {
-            const script = scriptMap.get(scriptId);
-            if (!script) {
-              errors.push({ scriptId, error: "未找到对应剧本" });
-              await u.db("o_script").where("id", scriptId).update({ extractState: -1, errorReason: "未找到对应剧本" });
-            } else {
-              // 查看状态是否为等待提取，仅对等待提取进行生成
-              const item = await u.db("o_script").where("id", scriptId).select("extractState").first();
-              if (item?.extractState == 2) {
-                validScripts.push({ id: scriptId, script });
-              }
-            }
+    async function processBatch(itemIds: number[]) {
+      const validScripts: { id: number; script: o_script }[] = [];
+      for (const scriptId of itemIds) {
+        const script = scriptMap.get(scriptId);
+        if (!script) {
+          errors.push({ scriptId, error: "未找到对应剧本" });
+          await u.db("o_script").where("id", scriptId).update({ extractState: -1, errorReason: "未找到对应剧本" });
+        } else {
+          // 查看状态是否为等待提取，仅对等待提取进行生成
+          const item = await u.db("o_script").where("id", scriptId).select("extractState").first();
+          if (item?.extractState == 2) {
+            validScripts.push({ id: scriptId, script });
           }
         }
-        if (!validScripts.length) return;
-        const validScriptIds = validScripts.map((v) => v.id);
-        // 修改状态为正在提取中
-        await u.db("o_script").whereIn("id", validScriptIds).update({
-          extractState: 0, // 正在提取
-        });
-        // 查询当前项目已有的资产列表，提供给 AI 参考
-        const existingAssets = await u.db("o_assets").where("projectId", projectId).select("name", "type");
-        const existingAssetsList = existingAssets.map((a) => `${a.name}(${a.type})`).join("、");
-
-        // 拼接多集剧本内容，每集用分隔标记
-        const scriptsContent = validScripts
-          .map(({ id, script }) => `===== 【剧本ID: ${id}】${script.name || ""} =====\n${script.content}`)
-          .join("\n\n");
-
-        let collectedNew: NewAsset[] = [];
-        let collectedExisting: ExistingAssetRef[] = [];
-        try {
-          const resultTool = tool({
-            description: "返回结果时必须调用这个工具",
-            inputSchema: z.object({
-              newAssets: z
-                .array(NewAssetSchema)
-                .describe("新发现的资产列表（不在已有资产列表中的），需要完整的 prompt、name、desc、type 和使用该资产的 scriptIds"),
-              existingAssetRefs: z
-                .array(ExistingAssetRefSchema)
-                .describe("已有资产的引用列表（在已有资产列表中已存在的），只需给出资产名称和使用该资产的 scriptIds"),
-            }),
-            execute: async ({ newAssets, existingAssetRefs }) => {
-
-              if (newAssets?.length) collectedNew = newAssets;
-              if (existingAssetRefs?.length) collectedExisting = existingAssetRefs;
-              return "无需回复用户任何内容";
-            },
-          });
-          const promptData = await u.db("o_prompt").where("type", "scriptAssetExtraction").first();
-          let scriptAssetExtraction = "" as string | undefined;
-          if (promptData && promptData.useData) {
-            scriptAssetExtraction = promptData.useData;
-          } else {
-            scriptAssetExtraction = promptData?.data ?? undefined;
-          }
-          const existingHint = existingAssetsList
-            ? `\n\n【已有资产列表】：${existingAssetsList}\n对于已有资产，如果在剧本中出现，只需在 existingAssetRefs 中给出资产名称和对应的 scriptIds 数组即可，无需重复生成 desc/type。对于新发现的资产（不在已有列表中），请在 newAssets 中给出完整信息。`
-            : "";
-          const output = await u.Ai.Text("universalAi").invoke({
-            messages: [
-              {
-                role: "system",
-                content:
-                  scriptAssetExtraction +
-                  "\n\n提取剧本中涉及的资产（角色、场景、道具），参考技能 script_assets_extract 规范，结果必须通过 resultTool 工具返回。" +
-                  "\n\n注意：本次会同时提供多集剧本，每集剧本以 ===== 【剧本ID: xxx】 ===== 分隔。你需要分析每集剧本使用了哪些资产，并在输出中用 scriptIds 数组标明每个资产在哪些剧本中出现。",
-              },
-              {
-                role: "user",
-                content: `当前已有资产列表：${existingHint}\n\n请根据以下${validScripts.length}集剧本提取对应的剧本资产（角色、场景、道具）:\n\n${scriptsContent}`,
-              },
-            ],
-            tools: { resultTool },
-          });
-          await persistGroupResult({
-            batchScriptIds: validScriptIds,
-            newAssets: collectedNew,
-            existingRefs: collectedExisting,
-          });
-        } catch (e) {
-          console.error(`[extractAssets] group=[${validScriptIds.join(",")}] 提取失败:`, e);
-          for (const { id, script } of validScripts) {
-            errors.push({ scriptId: id, error: (script.name || "") + ":" + u.error(e).message });
-            await u
-              .db("o_script")
-              .where("id", id)
-              .update({ extractState: -1, errorReason: u.error(e).message });
-          }
-          return;
-        }
-        if (!collectedNew.length && !collectedExisting.length) {
-          for (const { id } of validScripts) {
-            errors.push({ scriptId: id, error: "AI 未返回任何资产" });
-            await u.db("o_script").where("id", id).update({ extractState: -1, errorReason: "AI 未返回任何资产" });
-          }
-          return;
-        }
+      }
+      if (!validScripts.length) return;
+      const validScriptIds = validScripts.map((v) => v.id);
+      // 修改状态为正在提取中
+      await u.db("o_script").whereIn("id", validScriptIds).update({
+        extractState: 0, // 正在提取
       });
+      // 查询当前项目已有的资产列表，提供给 AI 参考
+      const existingAssets = await u.db("o_assets").where("projectId", projectId).select("name", "type");
+      const existingAssetsList = existingAssets.map((a) => `${a.name}(${a.type})`).join("、");
+
+      // 拼接多集剧本内容，每集用分隔标记
+      const scriptsContent = validScripts
+        .map(({ id, script }) => `===== 【剧本ID: ${id}】${script.name || ""} =====\n${script.content}`)
+        .join("\n\n");
+
+      let collectedNew: NewAsset[] = [];
+      let collectedExisting: ExistingAssetRef[] = [];
+      try {
+        const resultTool = tool({
+          description: "返回结果时必须调用这个工具",
+          inputSchema: z.object({
+            newAssets: z
+              .array(NewAssetSchema)
+              .describe("新发现的资产列表（不在已有资产列表中的），需要完整的 name、desc、type 和使用该资产的 scriptIds"),
+            existingAssetRefs: z
+              .array(ExistingAssetRefSchema)
+              .describe("已有资产的引用列表（在已有资产列表中已存在的），只需给出资产名称和使用该资产的 scriptIds"),
+          }),
+          execute: async ({ newAssets, existingAssetRefs }) => {
+
+            if (newAssets?.length) collectedNew = newAssets;
+            if (existingAssetRefs?.length) collectedExisting = existingAssetRefs;
+            return "无需回复用户任何内容";
+          },
+        });
+        const promptData = await u.db("o_prompt").where("type", "scriptAssetExtraction").first();
+        let scriptAssetExtraction = "" as string | undefined;
+        if (promptData && promptData.useData) {
+          scriptAssetExtraction = promptData.useData;
+        } else {
+          scriptAssetExtraction = promptData?.data ?? undefined;
+        }
+        const existingHint = existingAssetsList
+          ? `\n\n【已有资产列表】：${existingAssetsList}\n对于已有资产，如果在剧本中出现，只需在 existingAssetRefs 中给出资产名称和对应的 scriptIds 数组即可，无需重复生成 desc/type。对于新发现的资产（不在已有列表中），请在 newAssets 中给出完整信息。`
+          : "";
+        const strictExtractionRules = `
+
+【强制提取与命名规则】
+1. 角色资产 name 必须使用剧本中的标准人名或稳定称呼，例如“方源”“古月方正”“花酒行者”“古月族长”。禁止把服装、姿态、年龄状态、镜头形态当作角色 name，例如“少年常服定装”“魔头战损形态”“祭服定装”；这些内容只能写进 desc。
+2. 同一角色的不同年龄、服装、战损、回忆或仪式状态必须合并到同一个角色资产 desc 内；如果已有资产列表只有服装/状态名，不能把它当成标准角色引用，仍需创建或引用标准角色名。
+3. 每集有台词、动作、被镜头重点呈现或推动剧情的命名角色必须提取或引用，主角和反复出现角色不得遗漏。
+4. 有独立视觉形态或剧情功能的蛊虫、法器、令牌、钱币、药物等必须提取为 tool，例如“春秋蝉”“月光蛊”“希望蛊”“酒虫”“元石”。抽象设定可跳过，除非剧本把它作为可见空间、可见物件或画面主体。
+5. 场景资产 name 必须是可拍摄地点或空间，例如“古月山寨·学堂”“地下溶洞”；不要把纯抽象概念当作场景。
+6. scriptIds 只能填写该资产实际出现在对应剧本文本中的剧本 id；同一资产出现在多集时一次性列出所有相关 id。
+7. 宁可多返回合理的命名主角、重要配角、关键道具，也不要只返回服装状态或泛化描述。`;
+        await u.Ai.Text("universalAi").invoke({
+          messages: [
+            {
+              role: "system",
+              content:
+                scriptAssetExtraction +
+                "\n\n提取剧本中涉及的资产（角色、场景、道具），参考技能 script_assets_extract 规范，结果必须通过 resultTool 工具返回。" +
+                "\n\n注意：本次会同时提供最多 5 集剧本，每集剧本以 ===== 【剧本ID: xxx】 ===== 分隔。你需要分析每集剧本使用了哪些资产，并在输出中用 scriptIds 数组标明每个资产在哪些剧本中出现。" +
+                strictExtractionRules,
+            },
+            {
+              role: "user",
+              content: `当前已有资产列表：${existingHint}\n\n请根据以下${validScripts.length}集剧本提取对应的剧本资产（角色、场景、道具）:\n\n${scriptsContent}`,
+            },
+          ],
+          tools: { resultTool },
+        });
+        await persistGroupResult({
+          batchScriptIds: validScriptIds,
+          newAssets: collectedNew,
+          existingRefs: collectedExisting,
+        });
+      } catch (e) {
+        console.error(`[extractAssets] group=[${validScriptIds.join(",")}] 提取失败:`, e);
+        for (const { id, script } of validScripts) {
+          errors.push({ scriptId: id, error: (script.name || "") + ":" + u.error(e).message });
+          await u
+            .db("o_script")
+            .where("id", id)
+            .update({ extractState: -1, errorReason: u.error(e).message });
+        }
+        return;
+      }
+      if (!collectedNew.length && !collectedExisting.length) {
+        for (const { id } of validScripts) {
+          errors.push({ scriptId: id, error: "AI 未返回任何资产" });
+          await u.db("o_script").where("id", id).update({ extractState: -1, errorReason: "AI 未返回任何资产" });
+        }
+        return;
+      }
     }
-    processGroup(scriptGroups);
+
+    async function processGroup(group: number[][]) {
+      for (const itemIds of group) {
+        await processBatch(itemIds);
+      }
+    }
+    processGroup(scriptGroups).catch((e) => {
+      console.error("[extractAssets] 后台提取资产任务失败:", e);
+    });
   },
 );

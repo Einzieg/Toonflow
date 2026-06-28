@@ -3,6 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { getVideoTailFramePath } from "@/utils/videoTailFrame";
 const router = express.Router();
 
 export default router.post(
@@ -12,6 +13,10 @@ export default router.post(
   }),
   async (req, res) => {
     const { id } = req.body;
+    const video = await u.db("o_video").where("id", id).select("id", "projectId").first();
+    if (video?.projectId && (await u.oss.fileExists(getVideoTailFramePath(Number(id), Number(video.projectId))))) {
+      await u.oss.deleteFile(getVideoTailFramePath(Number(id), Number(video.projectId)));
+    }
     await u.db("o_video").where("id", id).delete();
     await u.db("o_videoTrack").where("videoId", id).update({
       videoId: null,

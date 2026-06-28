@@ -5,7 +5,8 @@ import sharp from "sharp";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { Output } from "ai";
-import { buildAssetPrompt, buildAssetStyleGuard } from "@/utils/assetsPrompt";
+import { buildAssetPrompt, buildAssetStyleGuard, enforceRolePromptPresetFinalPrompt } from "@/utils/assetsPrompt";
+import { mediaPromptSafetyInstruction } from "@/utils/promptSafety";
 const router = express.Router();
 const runningAssetImageTasks = new Set<number>();
 const DEFAULT_IMAGE_CONCURRENCY = 10;
@@ -134,11 +135,14 @@ export default router.post(
       .db("o_assets")
       .leftJoin("o_image", "o_assets.imageId", "o_image.id")
       .whereIn("o_assets.id", parentIds as number[])
-      .select("o_assets.id", "o_image.filePath", "o_assets.describe");
+      .select("o_assets.id", "o_image.filePath", "o_assets.describe", "o_assets.prompt", "o_assets.name", "o_assets.type");
     assetsDataArr.forEach((i: any) => {
       const parent = parentAssetsData.find((item) => item.id === i.assetsId);
       if (parent) {
         i.parentDescribe = parent.describe;
+        i.parentPrompt = parent.prompt;
+        i.parentName = parent.name;
+        i.parentType = parent.type;
       }
     });
     const imageUrlRecord: Record<number, string> = {};
@@ -199,19 +203,23 @@ export default router.post(
           type: item.type as "role" | "scene" | "tool",
           name: item.name,
           describe: item.describe,
-          prompt: item.parentDescribe,
+          prompt: [item.parentPrompt, item.parentDescribe].filter(Boolean).join("\n"),
           artStyle: projectSettingData?.artStyle,
           derivative: true,
         });
         const userPrompt = `
               项目画风: ${projectSettingData?.artStyle || "未指定"}
               ${promptGuard}
+              安全表达要求: ${mediaPromptSafetyInstruction()}
+              父级资产名称: ${item.parentName || "无"}
               父级资产描述: ${item.parentDescribe || "无详细描述"}
+              父级资产提示词: ${item.parentPrompt || "无"}
               当前资产描述: ${item.describe || "无详细描述"}`;
         console.log(`[production.assets.batchGenerateAssetsImage] prompt start asset=${item.id} name=${item.name} imageId=${imageId}`);
         const text = await generateDerivativePrompt(`${typeConfig.prompt}\n\n${styleGuard}`, userPrompt);
         if (!text) throw new Error("衍生资产提示词生成为空");
-        const finalPrompt = `${text}\n\n${styleGuard}`;
+        const sourcePromptContext = [item.parentPrompt, item.parentDescribe, item.describe].filter(Boolean).join("\n");
+        const finalPrompt = `${enforceRolePromptPresetFinalPrompt(item.type, text, undefined, sourcePromptContext)}\n\n${styleGuard}`;
         await u.db("o_assets").where("id", item.id).update({ prompt: finalPrompt });
         console.log(`[production.assets.batchGenerateAssetsImage] prompt completed asset=${item.id} name=${item.name} imageId=${imageId}`);
 

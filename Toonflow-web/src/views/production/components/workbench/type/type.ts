@@ -8,11 +8,21 @@ interface UploadItemBase {
   src?: string;
   prompt?: string;
   volcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
+  shotMeta?: ShotTimingMeta | null;
+  referenceImageKind?: "storyboard" | "grid" | "tailFrame";
 }
 
 interface UploadItemStoryboard extends UploadItemBase {
   sources: "storyboard";
   index: number;
+  gridSrc?: string;
+  gridImageState?: string | null;
+  gridImageReason?: string | null;
+  tailFrameSrc?: string;
+  tailFrameVideoId?: number | null;
 }
 interface VideoModel {
   name: string;
@@ -43,6 +53,15 @@ interface StoryboardItem {
   state?: string | null;
   trackId?: number | null;
   videoDesc?: string | null;
+  shotMeta?: ShotTimingMeta | null;
+  gridSrc?: string;
+  gridImagePath?: string | null;
+  gridImageState?: string | null;
+  gridImageReason?: string | null;
+  gridImagePrompt?: string | null;
+  gridImageFlowId?: number | null;
+  tailFrameSrc?: string;
+  tailFrameVideoId?: number | null;
 }
 
 interface TrackItem {
@@ -51,6 +70,9 @@ interface TrackItem {
   state: "未生成" | "生成中" | "已完成" | "生成失败";
   reason?: string;
   selectVideoId?: number | null;
+  referenceMediaLocked?: boolean;
+  storyboardCount?: number;
+  canUnmerge?: boolean;
   medias: TrackMedia[];
   videoList: VideoItem[];
   duration: number;
@@ -67,9 +89,29 @@ interface TrackMediaBase {
   id?: number;
   prompt?: string;
   volcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
+  duration?: number | string | null;
+  shotMeta?: ShotTimingMeta | null;
   fileType: "image" | "video" | "audio";
   slotType?: Type; // 本地保存时记录的 slot 类型，用于切换轨道时精确还原位置
   index?: number;
+  referenceImageKind?: "storyboard" | "grid" | "tailFrame";
+  gridSrc?: string;
+  gridImageState?: string | null;
+  gridImageReason?: string | null;
+  tailFrameSrc?: string;
+  tailFrameVideoId?: number | null;
+}
+
+interface ShotTimingMeta {
+  sourceShotNo?: number;
+  dialogueCharCount?: number | null;
+  estimatedSpeechRate?: string | null;
+  estimatedSpeechDuration?: number | null;
+  durationReason?: string | null;
+  durationReasonSource?: "agent" | "manual" | "unknown" | string | null;
 }
 
 interface TrackMediaStoryboard extends TrackMediaBase {

@@ -137,6 +137,10 @@ interface AssetItem {
   describe?: string;
   filePath?: string;
   remark?: string;
+  volcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
 }
 
 const tableData = ref<AssetItem[]>([]);
@@ -268,6 +272,10 @@ async function onConfirm() {
         type: item.type,
         remark: item.remark ?? "",
         prompt: item.prompt,
+        volcengineAssetUri: item.volcengineAssetUri ?? "",
+        voiceProfile: item.voiceProfile ?? "",
+        voiceTone: item.voiceTone ?? "",
+        speechRate: item.speechRate ?? "",
       });
       if (item.filePath) {
         await axios.post("/assets/saveAssets", {

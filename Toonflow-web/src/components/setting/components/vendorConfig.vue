@@ -41,7 +41,7 @@
             :message="$t('settings.vendor.msg.vendorNeedsUpdate')"
             style="margin-bottom: 12px" />
           <t-form-item>
-            <MdPreview v-model="currentVendor.description" :theme="themeSetting.mode" />
+            <MdPreview v-model="currentVendor.description" :theme="themeSetting.mode === 'auto' ? 'light' : themeSetting.mode" />
           </t-form-item>
           <t-form-item v-for="input in requiredInputs" :key="input.key" :name="input.key">
             <template #label>
@@ -918,6 +918,7 @@ function handleEditModel(model: VendorModel) {
       think: model.think,
       mode: [],
       mixedMode: [],
+      mixedModeCount: {},
       audio: "optional",
       durationResolutionMap: [{ duration: [], resolution: [] }],
     };
@@ -931,6 +932,7 @@ function handleEditModel(model: VendorModel) {
       think: false,
       mode: [...model.mode],
       mixedMode: [],
+      mixedModeCount: {},
       audio: "optional",
       durationResolutionMap: [{ duration: [], resolution: [] }],
     };

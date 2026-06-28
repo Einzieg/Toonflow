@@ -1,10 +1,13 @@
 import settingStore from "@/stores/setting";
-const REEL_REGEX = /^(第[\d一二三四五六七八九十百千]+卷)\s*([^\n第]*)/gm;
-const DEFAULT_CHAPTER_REGEX = /第\s*([0-9０-９零一二三四五六七八九十百千万]+)\s*[章回节]\s*([^\n\r]*)/g;
+const REEL_REGEX = /^\s*(第\s*[\d０-９零〇一二三四五六七八九十百千万两]+\s*卷)\s*[：:、.．\-—]?\s*([^\n\r]*)$/gm;
+const DEFAULT_CHAPTER_REGEX =
+  /^\s*第\s*([0-9０-９零〇一二三四五六七八九十百千万两]+)\s*[章回节集](?:\s*[：:、.．\-—]\s*|\s+|$)([^\n\r]*)$/gm;
 const CHINESE_NUM_MAP: { [key: string]: number } = {
   零: 0,
+  〇: 0,
   一: 1,
   二: 2,
+  两: 2,
   三: 3,
   四: 4,
   五: 5,
@@ -17,6 +20,7 @@ const CHINESE_UNIT_MAP: { [key: string]: number } = {
   十: 10,
   百: 100,
   千: 1000,
+  万: 10000,
 };
 interface Chapter {
   index: number;
@@ -29,14 +33,18 @@ interface Reel {
   chapters: Chapter[];
 }
 function parseNumber(numStr: string): number {
-  if (/^\d+$/.test(numStr)) return parseInt(numStr, 10);
-  if (/^十[一二三四五六七八九]?$/.test(numStr)) {
-    if (numStr.length === 1) return 10;
-    return 10 + CHINESE_NUM_MAP[numStr[1]];
+  const normalized = numStr
+    .replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 65248))
+    .replace(/\s/g, "")
+    .replace(/[第章节回集卷]/g, "");
+  if (/^\d+$/.test(normalized)) return parseInt(normalized, 10);
+  if (/^十[一二三四五六七八九]?$/.test(normalized)) {
+    if (normalized.length === 1) return 10;
+    return 10 + CHINESE_NUM_MAP[normalized[1]];
   }
   let num = 0,
     digit = 0;
-  for (const c of numStr) {
+  for (const c of normalized) {
     if (CHINESE_NUM_MAP[c] !== undefined) digit = CHINESE_NUM_MAP[c];
     else if (CHINESE_UNIT_MAP[c] !== undefined) {
       if (digit === 0 && c === "十") digit = 1;
@@ -47,29 +55,48 @@ function parseNumber(numStr: string): number {
   num += digit;
   return num;
 }
+
+function cleanHeadingTitle(title?: string): string {
+  return (title ?? "").replace(/^[\s：:、.．\-—]+/, "").trim();
+}
+
+function ensureGlobalRegex(regex: RegExp): RegExp {
+  return regex.global ? regex : new RegExp(regex.source, `${regex.flags}g`);
+}
+
+function isLineStartMatch(source: string, index: number): boolean {
+  const prevLf = source.lastIndexOf("\n", index - 1);
+  const prevCr = source.lastIndexOf("\r", index - 1);
+  const lineStart = Math.max(prevLf, prevCr) + 1;
+  return source.slice(lineStart, index).trim() === "";
+}
+
+function getHeaderMatches(source: string, regex: RegExp): RegExpMatchArray[] {
+  const safeRegex = ensureGlobalRegex(regex);
+  safeRegex.lastIndex = 0;
+  return Array.from(source.matchAll(safeRegex)).filter((match) => isLineStartMatch(source, match.index ?? 0));
+}
+
+function getChapterRegex(): RegExp {
+  const regStr = settingStore().otherSetting.chapterReg;
+  if (!regStr) return DEFAULT_CHAPTER_REGEX;
+  const match = regStr.match(/^\/(.*)\/([igmuy]*)$/);
+  if (match) {
+    const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
+    return new RegExp(match[1], flags);
+  }
+  return new RegExp(regStr, "g");
+}
 export default function parseNovel(text: string): Reel[] {
   REEL_REGEX.lastIndex = 0;
-  const reelMatches = Array.from(text.matchAll(REEL_REGEX));
+  const reelMatches = getHeaderMatches(text, REEL_REGEX);
   const reels: Reel[] = [];
-  let CHAPTER_REGEX;
-
-  const regStr = settingStore().otherSetting.chapterReg;
-  if (regStr) {
-    const match = regStr.match(/^\/(.*)\/([igmuy]*)$/);
-    if (match) {
-      CHAPTER_REGEX = new RegExp(match[1], match[2]);
-    } else {
-      CHAPTER_REGEX = new RegExp(regStr);
-    }
-  } else {
-    CHAPTER_REGEX = DEFAULT_CHAPTER_REGEX;
-  }
+  const CHAPTER_REGEX = getChapterRegex();
 
   // 没有卷结构
   if (reelMatches.length === 0) {
     const chapters: Chapter[] = [];
-    CHAPTER_REGEX.lastIndex = 0;
-    const matches = Array.from(text.matchAll(CHAPTER_REGEX));
+    const matches = getHeaderMatches(text, CHAPTER_REGEX);
     if (matches.length === 0 && text.trim() !== "") {
       chapters.push({ index: 1, chapter: "", text: text.trim() });
     } else {
@@ -81,8 +108,8 @@ export default function parseNovel(text: string): Reel[] {
           .replace(/^[\r\n]+/, "")
           .trim();
         chapters.push({
-          index: parseNumber(matches[i][1].replace(/第|章/g, "")),
-          chapter: matches[i][2].trim(),
+          index: parseNumber(matches[i][1]),
+          chapter: cleanHeadingTitle(matches[i][2]),
           text: content,
         });
       }
@@ -103,11 +130,11 @@ export default function parseNovel(text: string): Reel[] {
     const match = reelMatches[i];
     const index = match.index!;
     const reelRaw = match[1];
-    const reelName = match[2]?.trim() || "";
+    const reelName = cleanHeadingTitle(match[2]) || reelRaw.replace(/\s/g, "");
     const end = i + 1 < reelMatches.length ? reelMatches[i + 1].index! : text.length;
     const reelSection = text.slice(index, end);
 
-    const chapterMatches = Array.from(reelSection.matchAll(CHAPTER_REGEX));
+    const chapterMatches = getHeaderMatches(reelSection, CHAPTER_REGEX);
     const chapters: Chapter[] = [];
     if (chapterMatches.length === 0 && reelSection.replace(REEL_REGEX, "").trim() !== "") {
       chapters.push({
@@ -124,8 +151,8 @@ export default function parseNovel(text: string): Reel[] {
         .replace(/^[\r\n]+/, "")
         .trim();
       chapters.push({
-        index: parseNumber(chapterMatches[j][1].replace(/第|章/g, "")),
-        chapter: chapterMatches[j][2].trim(),
+        index: parseNumber(chapterMatches[j][1]),
+        chapter: cleanHeadingTitle(chapterMatches[j][2]),
         text: content,
       });
     }
@@ -134,7 +161,7 @@ export default function parseNovel(text: string): Reel[] {
 
     if (!reelMap.has(reelName)) {
       reelMap.set(reelName, {
-        index: parseNumber(reelRaw.replace(/第|卷/g, "")),
+        index: parseNumber(reelRaw),
         reel: reelName,
         chapters: [],
       });

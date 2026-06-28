@@ -18,64 +18,72 @@
           </t-chat-list>
           <t-chat-sender
             class="inputBox"
-            :disabled="status === 'pending' || status === 'streaming'"
+            :disabled="isChatBusy"
             v-model="inputValue"
-            :loading="status === 'pending' || status === 'streaming'"
-            placeholder="$t('workbench.scriptAgent.inputPlaceholder')"
+            :loading="isChatBusy"
+            :placeholder="$t('workbench.scriptAgent.inputPlaceholder')"
             @send="handleSend"
             @stop="handleStop">
             <template #footer-prefix>
-              <t-popup trigger="click" placement="top-left">
-                <t-button shape="square" variant="outline" size="small" :disabled="status === 'pending' || status === 'streaming'">
-                  <template #icon>
-                    <i-setting-config size="16" />
+              <div class="senderActions">
+                <t-popup trigger="click" placement="top-left">
+                  <t-button shape="square" variant="outline" size="small" :disabled="isChatBusy">
+                    <template #icon>
+                      <i-setting-config size="16" />
+                    </template>
+                  </t-button>
+                  <template #content>
+                    <div class="settingMenu">
+                      <div class="settingMenuItem" @click="handleReconnect()">
+                        <i-api size="14" />
+                        <span>{{ $t("workbench.scriptAgent.reconnect") }}</span>
+                      </div>
+                      <div class="settingMenuItem" @click="handleClearMemory('message')">
+                        <i-delete size="14" />
+                        <span>{{ $t("workbench.scriptAgent.clearMessageMemory") }}</span>
+                      </div>
+                      <div class="settingMenuItem" @click="handleClearMemory('summary')">
+                        <i-close size="14" />
+                        <span>{{ $t("workbench.scriptAgent.clearSummaryMemory") }}</span>
+                      </div>
+                      <div class="settingMenuItem danger" @click="handleClearMemory('all')">
+                        <i-delete-one size="14" />
+                        <span>{{ $t("workbench.scriptAgent.clearAllMemory") }}</span>
+                      </div>
+                    </div>
                   </template>
-                </t-button>
-                <template #content>
-                  <div class="settingMenu">
-                    <div class="settingMenuItem" @click="handleReconnect()">
-                      <i-api size="14" />
-                      <span>{{ $t("workbench.scriptAgent.reconnect") }}</span>
+                </t-popup>
+                <t-popup trigger="click" placement="top" v-if="showThink">
+                  <t-button size="small" variant="outline" :theme="(['default', 'success', 'warning', 'danger'] as const)[thinkLevel] || 'default'">
+                    <template #icon>
+                      <i-tips size="16" />
+                    </template>
+                    {{ thinkLevelOptions[thinkLevel]?.label }}
+                  </t-button>
+                  <template #content>
+                    <div class="settingMenu">
+                      <div
+                        v-for="opt in thinkLevelOptions"
+                        :key="opt.value"
+                        class="settingMenuItem"
+                        :class="{ active: thinkLevel === opt.value }"
+                        @click="scriptAgentStore().updateThinkConfig(opt.value)">
+                        <span>{{ opt.label }}</span>
+                      </div>
                     </div>
-                    <div class="settingMenuItem" @click="handleClearMemory('message')">
-                      <i-delete size="14" />
-                      <span>{{ $t("workbench.scriptAgent.clearMessageMemory") }}</span>
-                    </div>
-                    <div class="settingMenuItem" @click="handleClearMemory('summary')">
-                      <i-close size="14" />
-                      <span>{{ $t("workbench.scriptAgent.clearSummaryMemory") }}</span>
-                    </div>
-                    <div class="settingMenuItem danger" @click="handleClearMemory('all')">
-                      <i-delete-one size="14" />
-                      <span>{{ $t("workbench.scriptAgent.clearAllMemory") }}</span>
-                    </div>
-                  </div>
-                </template>
-              </t-popup>
-              <t-popup trigger="click" placement="top" v-if="showThink">
+                  </template>
+                </t-popup>
                 <t-button
+                  v-if="showContinueScriptAuto"
                   size="small"
+                  theme="primary"
                   variant="outline"
-                  :theme="(['default', 'success', 'warning', 'danger'] as const)[thinkLevel] || 'default'"
-                  style="margin-left: 8px">
-                  <template #icon>
-                    <i-tips size="16" />
-                  </template>
-                  {{ thinkLevelOptions[thinkLevel]?.label }}
+                  :disabled="isChatBusy || !connected"
+                  @click="handleContinueScriptAuto">
+                  继续自动推进至结束
                 </t-button>
-                <template #content>
-                  <div class="settingMenu">
-                    <div
-                      v-for="opt in thinkLevelOptions"
-                      :key="opt.value"
-                      class="settingMenuItem"
-                      :class="{ active: thinkLevel === opt.value }"
-                      @click="scriptAgentStore().updateThinkConfig(opt.value)">
-                      <span>{{ opt.label }}</span>
-                    </div>
-                  </div>
-                </template>
-              </t-popup>
+                <t-checkbox v-model="faithfulOriginalMode" :disabled="isChatBusy" class="faithfulOriginalToggle">忠实原著</t-checkbox>
+              </div>
             </template>
           </t-chat-sender>
           <i-dot class="dot" theme="outline" :fill="connected ? 'green' : 'red'" />
@@ -85,6 +93,12 @@
                 <div class="forceGenerateDesc">{{ $t("workbench.scriptAgent.forceGenerate.desc") }}</div>
                 <div class="forceGenerateActions">
                   <t-button @click="forceGenerateVisible = false">{{ $t("workbench.scriptAgent.forceGenerate.confirm") }}</t-button>
+                  <t-button
+                    theme="primary"
+                    :disabled="isChatBusy || !connected || !showContinueScriptAuto"
+                    @click="handleForceContinueScriptAuto">
+                    继续自动推进至结束
+                  </t-button>
                 </div>
               </div>
             </div>
@@ -211,6 +225,8 @@ const thinkLevelOptions = [
 import productionAgentStore from "@/stores/productionAgent";
 const currentTable = ref(1);
 const inputValue = ref("");
+const isChatBusy = computed(() => status.value === "pending" || status.value === "streaming");
+const showContinueScriptAuto = computed(() => Boolean(planData.value.storySkeleton?.trim() && planData.value.adaptationStrategy?.trim()));
 const toolbars: ToolbarNames[] = [
   "bold",
   "underline",
@@ -243,11 +259,23 @@ const defMsg: ChatMessagesData[] = [
       {
         type: "suggestion",
         status: "complete",
-        data: [{ title: $t("workbench.scriptAgent.start"), prompt: $t("workbench.scriptAgent.start") }],
+        data: [
+          { title: $t("workbench.scriptAgent.start"), prompt: $t("workbench.scriptAgent.start") },
+          {
+            title: "忠实原著启动",
+            prompt: "以忠实原著模式启动剧本改编流程：严格基于原文，不魔改，只做影视化载体适配。",
+          },
+        ],
       },
     ],
   },
 ];
+
+const faithfulOriginalMode = ref(localStorage.getItem(`scriptAgent:${project.value?.id}:faithfulOriginalMode`) === "1");
+
+watch(faithfulOriginalMode, (value) => {
+  localStorage.setItem(`scriptAgent:${project.value?.id}:faithfulOriginalMode`, value ? "1" : "0");
+});
 
 onMounted(() => {
   if (messages.value.length <= 0) messages.value = [...defMsg, ...messages.value];
@@ -269,13 +297,34 @@ async function getPlanData() {
 //快捷发送
 const handleActions = {
   suggestion: (data?: any) => {
-    scriptAgentStore().chat(data?.content?.prompt);
+    handleSend(data?.content?.prompt);
   },
 };
 
 function handleSend(text: string) {
-  scriptAgentStore().chat(text);
+  if (!text?.trim()) return;
+  const finalText = buildScriptAgentInput(text);
+  scriptAgentStore().chat(finalText);
   inputValue.value = "";
+}
+
+function buildScriptAgentInput(text: string) {
+  const content = text.trim();
+  if (!faithfulOriginalMode.value || /忠实原著|不魔改|最小改动|不要偏离原文|按原著/.test(content)) {
+    return content;
+  }
+  return [
+    "【改编模式：忠实原著】",
+    "要求：严格基于原文，不魔改，不新增改变人物关系、剧情因果、关键设定和世界观规则的原创桥段；只做压缩、合并、画面化、口语化、OS/VO 等影视化载体适配。",
+    content,
+  ].join("\n");
+}
+function handleContinueScriptAuto() {
+  handleSend("继续自动推进至结束");
+}
+function handleForceContinueScriptAuto() {
+  forceGenerateVisible.value = false;
+  handleContinueScriptAuto();
 }
 function handleStop() {
   scriptAgentStore().stopGenerate();
@@ -509,6 +558,22 @@ onMounted(async () => {
   overflow-y: auto;
   padding: 12px 16px;
   box-sizing: border-box;
+}
+
+.senderActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.faithfulOriginalToggle {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--td-border-level-2-color);
+  border-radius: 6px;
+  background: var(--td-bg-color-container);
+  line-height: 28px;
 }
 
 .scriptList {

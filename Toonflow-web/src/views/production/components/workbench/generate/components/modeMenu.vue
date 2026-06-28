@@ -2,7 +2,7 @@
   <div class="modeMenu">
     <div class="left f ac">
       <div class="model">
-        <modelSelect v-model="modelParmas.model" type="video" size="small" simple />
+        <modelSelect v-model="modelParmas.model" type="video" size="small" simple @update:model-value="emit('modelChange')" />
       </div>
       <t-select size="small" class="mode" :value="modelParmas.mode" :onChange="handleBeforeChange">
         <t-option v-for="(item, index) in modeList" :key="index" :value="item.value" :label="item.label"></t-option>
@@ -93,12 +93,13 @@ const modelParmas = defineModel<ModelSetting>({
     audio: false,
   },
 });
-const emit = defineEmits(["modeChange"]);
-function handleBeforeChange(newVal: string) {
-  emit("modeChange", newVal);
+const emit = defineEmits(["modeChange", "durationChange", "modelChange"]);
+function handleBeforeChange(newVal: unknown) {
+  emit("modeChange", Array.isArray(newVal) ? JSON.stringify(newVal) : String(newVal));
 }
 function updateDuration(newDuration: number) {
   modelParmas.value.duration = newDuration;
+  emit("durationChange", newDuration);
   if (props.trackId) axios.post("/production/workbench/updateVideoDuration", { id: props.trackId, duration: newDuration });
 }
 </script>

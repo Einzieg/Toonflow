@@ -101,9 +101,16 @@
                 <div class="selected" v-show="selectedImageIndex === index && img.state === '已完成'">
                   <i-check-one theme="filled" size="25" fill="#000" />
                 </div>
-                <div class="delImage" v-show="hoveredImageIndex === index">
-                  <i-delete theme="outline" size="20" fill="#d0021b" @click.stop="deleteImage(img.id, index)" />
-                </div>
+                <t-button
+                  v-show="hoveredImageIndex === index && img.state !== '生成中'"
+                  class="delImage"
+                  size="small"
+                  shape="circle"
+                  theme="danger"
+                  variant="base"
+                  @click.stop="deleteImage(img.id, index)">
+                  <template #icon><i-delete theme="outline" size="16" /></template>
+                </t-button>
               </div>
               <div class="customUpload">
                 <t-upload
@@ -150,6 +157,7 @@ const props = defineProps<{
     describe?: string;
     type?: string;
     prompt?: string;
+    resolution?: string;
     src: string;
   };
 }>();
@@ -198,7 +206,11 @@ async function generatePrompt() {
   }
 }
 const emit = defineEmits(["update"]);
-const resolution = ref("1K");
+function getDefaultResolution(value?: string | null) {
+  return value || project.value?.imageQuality || "1K";
+}
+
+const resolution = ref(getDefaultResolution());
 //生成图片
 async function handleGenerate() {
   if (!props.formData.prompt) {
@@ -272,7 +284,7 @@ function handleCustomUpload(files: any[]): void {
 }
 
 //生成结果
-const resultImages = ref<{ id: string; src: string; state: string; selected?: boolean }[]>([]);
+const resultImages = ref<{ id: string | number; src: string; state: string; selected?: boolean; resolution?: string | null }[]>([]);
 //预览图片
 const visible = ref(false);
 const trigger = ref();
@@ -293,6 +305,7 @@ watch(
       selectedImageIndex.value = null;
       hoveredImageIndex.value = null;
       generateLoading.value = false;
+      resolution.value = getDefaultResolution(props.formData.resolution);
       fetchGeneratedImages();
     }
   },
@@ -309,16 +322,18 @@ function stopPolling() {
 
 async function fetchGeneratedImages() {
   const { data } = await axios.post("/assets/getImage", { assetsId: props.formData.id });
-  const images = data.tempAssets.map((item: { id: string; filePath: string; state: string; selected?: boolean }) => ({
+  const images = data.tempAssets.map((item: { id: string | number; filePath: string; state: string; selected?: boolean; resolution?: string | null }) => ({
     id: item.id,
     src: item.filePath,
     state: item.state,
     selected: item.selected ?? false,
+    resolution: item.resolution ?? "",
   }));
   resultImages.value = images;
   const selectedIdx = images.findIndex((img: { selected?: boolean }) => img.selected);
   if (selectedIdx !== -1) {
     selectedImageIndex.value = selectedIdx;
+    resolution.value = getDefaultResolution(images[selectedIdx].resolution || props.formData.resolution);
   }
 
   // 如果还有"生成中"的图片，自动轮询刷新
@@ -340,7 +355,8 @@ function selectImage(index: number) {
 
 //删除图片
 function deleteImage(id: string | number, index: number) {
-  console.log("%c Line:343 🍩 id", "background:#4fff4B", id);
+  const image = resultImages.value[index];
+  if (!image) return;
   const dialog = DialogPlugin.confirm({
     header: $t("workbench.assets.confirmDeleteHeader"),
     body: $t("workbench.assets.confirmDeleteBody"),
@@ -349,14 +365,36 @@ function deleteImage(id: string | number, index: number) {
     theme: "warning",
     onConfirm: async () => {
       try {
-        axios.post("/assets/delImage", { id: id });
-        window.$message.success($t("workbench.assets.deleteSuccess"));
+        const deletedSelected = selectedImageIndex.value === index;
+        const numericId = Number(id);
+        if (Number.isFinite(numericId) && numericId > 0) {
+          await axios.post("/assets/delImage", { id: numericId });
+        }
         resultImages.value.splice(index, 1);
-        if (selectedImageIndex.value === index) {
-          selectedImageIndex.value = null;
+
+        if (deletedSelected) {
+          const nextIndex = resultImages.value.findIndex((item) => item.state === "已完成");
+          selectedImageIndex.value = nextIndex === -1 ? null : nextIndex;
+          if (selectedImageIndex.value !== null) {
+            const nextImage = resultImages.value[selectedImageIndex.value];
+            const isLocalUpload = !nextImage.id;
+            resolution.value = getDefaultResolution(nextImage.resolution || props.formData.resolution);
+            await axios.post("/assets/saveAssets", {
+              id: props.formData.id,
+              base64: isLocalUpload ? nextImage.src : "",
+              type: props.formData.type,
+              prompt: props.formData.prompt,
+              projectId: project.value?.id,
+              imageId: isLocalUpload ? undefined : Number(nextImage.id),
+              resolution: resolution.value,
+            });
+          }
         } else if (selectedImageIndex.value !== null && selectedImageIndex.value > index) {
           selectedImageIndex.value--;
         }
+
+        window.$message.success($t("workbench.assets.deleteSuccess"));
+        emit("update");
         dialog.destroy();
       } catch (error) {
         window.$message.error($t("workbench.assets.deleteFail"));
@@ -378,6 +416,7 @@ async function onClick() {
       prompt: props.formData.prompt,
       projectId: project.value?.id,
       imageId: isLocalUpload ? undefined : Number(selectedImage.id),
+      resolution: resolution.value,
     });
     window.$message.success($t("workbench.assets.gen.imageSaved"));
     generateImageShow.value = false;

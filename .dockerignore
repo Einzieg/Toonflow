@@ -12,5 +12,10 @@ electron-builder.yml
 backup
 env
 docs
+data/*
+!data/serve/
+!data/serve/**
+!data/web/
+!data/web/**
 *.log
 .env*

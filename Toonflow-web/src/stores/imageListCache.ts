@@ -20,11 +20,18 @@ type ImageListCacheData = Record<CacheKey, Record<CacheKey, Record<CacheKey, Cac
 interface ResolveUrlItem {
     id: number | null | undefined;
     sources: string | undefined;
+    referenceImageKind?: "storyboard" | "grid" | "tailFrame";
 }
 
-/** 生成 urlMap 的复合键: "id:sources" */
-function makeUrlKey(id: number | null | undefined, sources: string | undefined): string {
+/** 生成 urlMap 的复合键: "id:sources[:referenceImageKind]" */
+function makeUrlKey(id: number | null | undefined, sources: string | undefined, referenceImageKind?: string): string {
+    if (sources === "storyboard") return `${id ?? ""}:${sources}:${referenceImageKind === "grid" || referenceImageKind === "tailFrame" ? referenceImageKind : "storyboard"}`;
     return `${id ?? ""}:${sources ?? ""}`;
+}
+
+function normalizeReferenceImageKind(sources: string | undefined, referenceImageKind?: string): "storyboard" | "grid" | "tailFrame" | undefined {
+    if (sources !== "storyboard") return undefined;
+    return referenceImageKind === "grid" || referenceImageKind === "tailFrame" ? referenceImageKind : "storyboard";
 }
 
 function hasResolvedUrl(urlMap: Record<string, string>, key: string): boolean {
@@ -60,6 +67,7 @@ function extractPath(url: string | undefined): string {
 function toCachedItems(items: (UploadItem | TrackMedia)[]): CachedUploadItem[] {
     return items.map((item) => ({
         ...JSON.parse(JSON.stringify(item)),
+        referenceImageKind: normalizeReferenceImageKind((item as any).sources, (item as any).referenceImageKind),
         src: extractPath(item.src),
     }));
 }
@@ -89,14 +97,14 @@ export default defineStore(
             // 过滤掉已经解析过的、id 无效的项
             const needResolve = items.filter((item) => {
                 if (item.id == null) return false;
-                const key = makeUrlKey(item.id, item.sources);
+                const key = makeUrlKey(item.id, item.sources, item.referenceImageKind);
                 return !hasResolvedUrl(urlMap.value, key);
             });
 
             if (needResolve.length) {
                 try {
                     const { data } = await axios.post("/production/workbench/getFileUrl", {
-                        items: needResolve.map((item) => ({ id: item.id, sources: item.sources })),
+                        items: needResolve.map((item) => ({ id: item.id, sources: item.sources, referenceImageKind: item.referenceImageKind })),
                     });
                     // axios 拦截器已返回 response.data，后端可能再包一层 { data: { ... } }
                     const rawData = data.data;
@@ -107,7 +115,7 @@ export default defineStore(
                         // 格式: [{ id: 1, sources: "storyboard", url: "http://..." }, ...]
                         rawData.forEach((item: any) => {
                             if (item.id != null && item.url) {
-                                const key = makeUrlKey(item.id, item.sources);
+                                const key = makeUrlKey(item.id, item.sources, item.referenceImageKind);
                                 resolved[key] = item.url;
                             }
                         });
@@ -120,7 +128,7 @@ export default defineStore(
 
                     // 记录未解析成功的 key，避免后续继续回退到已失效的旧路径。
                     needResolve.forEach((item) => {
-                        const key = makeUrlKey(item.id, item.sources);
+                        const key = makeUrlKey(item.id, item.sources, item.referenceImageKind);
                         if (!hasResolvedUrl(resolved, key)) {
                             resolved[key] = "";
                         }
@@ -135,16 +143,16 @@ export default defineStore(
             // 返回所有请求项的映射（含之前缓存的）
             const result: Record<string, string> = {};
             items.forEach((item) => {
-                const key = makeUrlKey(item.id, item.sources);
+                const key = makeUrlKey(item.id, item.sources, item.referenceImageKind);
                 result[key] = hasResolvedUrl(urlMap.value, key) ? (urlMap.value[key] || "") : "";
             });
             return result;
         }
 
         /** 通过 id + sources 同步解析为完整 URL（优先走内存缓存） */
-        function resolveUrlSync(id: number | null | undefined, sources: string | undefined, fallbackPath?: string): string {
+        function resolveUrlSync(id: number | null | undefined, sources: string | undefined, fallbackPath?: string, referenceImageKind?: string): string {
             if (id != null) {
-                const key = makeUrlKey(id, sources);
+                const key = makeUrlKey(id, sources, referenceImageKind);
                 if (hasResolvedUrl(urlMap.value, key)) return urlMap.value[key] || "";
             }
             // 降级返回原始路径
@@ -155,7 +163,7 @@ export default defineStore(
         function toFullItems(items: CachedUploadItem[]): UploadItem[] {
             return items.map((item) => ({
                 ...item,
-                src: resolveUrlSync(item.id, (item as any).sources, item.src),
+                src: resolveUrlSync(item.id, (item as any).sources, item.src, (item as any).referenceImageKind),
             })) as UploadItem[];
         }
 
@@ -179,7 +187,7 @@ export default defineStore(
             // 收集所有需要解析的 id + sources
             const resolveItems: ResolveUrlItem[] = cached
                 .filter((item) => item.id != null)
-                .map((item) => ({ id: item.id, sources: (item as any).sources }));
+                .map((item) => ({ id: item.id, sources: (item as any).sources, referenceImageKind: (item as any).referenceImageKind }));
             await resolveUrls(resolveItems);
             return toFullItems(cached);
         }
@@ -206,8 +214,8 @@ export default defineStore(
             let urlMapDirty = false;
             imageList.forEach((item) => {
                 if (!item.src || item.id == null) return;
-                const key = makeUrlKey(item.id, (item as any).sources);
-                if (!urlMap.value[key]) {
+                const key = makeUrlKey(item.id, (item as any).sources, (item as any).referenceImageKind);
+                if (urlMap.value[key] !== item.src) {
                     urlMap.value[key] = item.src;
                     urlMapDirty = true;
                 }
@@ -271,8 +279,32 @@ export default defineStore(
 
             trackList.forEach((track) => {
                 if (track.id == null) return;
-                if (scriptCache[track.id]) return;
-                scriptCache[track.id] = toCachedItems(track.medias);
+                const nextItems = toCachedItems(track.medias);
+                if (!scriptCache[track.id] || track.referenceMediaLocked) {
+                    scriptCache[track.id] = nextItems;
+                    return;
+                }
+
+                let urlMapDirty = false;
+                nextItems.forEach((nextItem) => {
+                    if (nextItem.id == null || !nextItem.src) return;
+                    const nextSources = (nextItem as any).sources;
+                    const nextKind = normalizeReferenceImageKind(nextSources, (nextItem as any).referenceImageKind);
+                    const cachedItem = scriptCache[track.id].find(
+                        (item) =>
+                            item.id === nextItem.id &&
+                            (item as any).sources === nextSources &&
+                            normalizeReferenceImageKind((item as any).sources, (item as any).referenceImageKind) === nextKind,
+                    );
+                    if (!cachedItem || cachedItem.src === nextItem.src) return;
+                    cachedItem.src = nextItem.src;
+                    const key = makeUrlKey(nextItem.id, nextSources, nextKind);
+                    urlMap.value[key] = nextItem.src;
+                    urlMapDirty = true;
+                });
+                if (urlMapDirty) {
+                    urlMap.value = { ...urlMap.value };
+                }
             });
         }
 
@@ -303,10 +335,10 @@ export default defineStore(
             Object.values(scriptCache).forEach((items) => {
                 items.forEach((item) => {
                     if (item.id == null) return;
-                    const key = makeUrlKey(item.id, (item as any).sources);
+                    const key = makeUrlKey(item.id, (item as any).sources, (item as any).referenceImageKind);
                     if (!seen.has(key)) {
                         seen.add(key);
-                        allItems.push({ id: item.id, sources: (item as any).sources });
+                        allItems.push({ id: item.id, sources: (item as any).sources, referenceImageKind: (item as any).referenceImageKind });
                     }
                 });
             });

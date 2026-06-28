@@ -4,6 +4,7 @@ import { z } from "zod";
 import { success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { cleanupStoryboardFirstByProjectScript } from "@/utils/storyboardFirstCleanup";
+import { cleanupStoryboardVideoReferenceFiles } from "@/utils/storyboardVideoReference";
 const router = express.Router();
 
 // 删除剧本
@@ -39,6 +40,10 @@ export default router.post(
           try {
             item.filePath && (await u.oss.deleteFile(item.filePath));
             item.thumbPath && (await u.oss.deleteFile(item.thumbPath));
+            await cleanupStoryboardVideoReferenceFiles({
+              videoReferencePath: item.videoReferencePath,
+              frameManifest: item.frameManifest,
+            });
           } catch (e) {}
         }),
       );

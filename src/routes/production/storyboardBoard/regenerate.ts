@@ -4,8 +4,18 @@ import u from "@/utils";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { STORYBOARD_BOARD_FIXED_IMAGE_RATIO, generateStoryboardBoardImageFromScript, type StoryboardBoardContext, type StoryboardBoardInput } from "@/utils/storyboardBoard";
+import { cleanupStoryboardVideoReferenceFiles } from "@/utils/storyboardVideoReference";
 
 const router = express.Router();
+const STALE_STORYBOARD_BOARD_MS = 30 * 60 * 1000;
+
+function isStaleGeneratingBoard(board: any) {
+  if (board?.state !== "生成中") return false;
+  const timestamp = Number(board.updateTime || board.createTime || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
+  const hasImage = Boolean(String(board.filePath || "").trim() || String(board.thumbPath || "").trim());
+  return !hasImage && Date.now() - timestamp > STALE_STORYBOARD_BOARD_MS;
+}
 
 function normalizeImageQuality(value: unknown): StoryboardBoardContext["imageQuality"] {
   const text = String(value || "");
@@ -77,7 +87,7 @@ export default router.post(
     const { boardId } = req.body as { boardId: number };
     const board = await u.db("o_storyboardBoard").where("id", boardId).first();
     if (!board) return res.status(404).send(error("故事板不存在"));
-    if (board.state === "生成中") return res.status(400).send(error("故事板正在生成中，请稍后再试"));
+    if (board.state === "生成中" && !isStaleGeneratingBoard(board)) return res.status(400).send(error("故事板正在生成中，请稍后再试"));
 
     const projectId = Number(board.projectId);
     const scriptId = Number(board.scriptId);
@@ -87,7 +97,7 @@ export default router.post(
     if (!storyboardIds.length) return res.status(400).send(error("故事板缺少关联分镜"));
 
     const [project, script, storyboards] = await Promise.all([
-      u.db("o_project").where("id", projectId).select("name", "type", "imageModel", "imageQuality", "videoRatio", "artStyle", "directorManual").first(),
+      u.db("o_project").where("id", projectId).select("name", "type", "imageModel", "imageQuality", "videoRatio", "videoModel", "artStyle", "directorManual").first(),
       u.db("o_script").where({ id: scriptId, projectId }).select("name", "content").first(),
       u
         .db("o_storyboard")
@@ -102,9 +112,18 @@ export default router.post(
     if (storyboards.length !== storyboardIds.length) return res.status(400).send(error("故事板关联分镜不完整"));
 
     await deleteStaleBoardVideos(boardId);
+    await cleanupStoryboardVideoReferenceFiles({
+      videoReferencePath: board.videoReferencePath,
+      frameManifest: board.frameManifest,
+    });
     await u.db("o_storyboardBoard").where("id", boardId).update({
       filePath: "",
       thumbPath: "",
+      videoReferencePath: "",
+      videoReferenceMode: "",
+      frameManifest: "",
+      shotTimeline: "",
+      lockedNarrative: "",
       state: "生成中",
       errorReason: "",
       updateTime: Date.now(),
@@ -125,6 +144,7 @@ export default router.post(
           imageModel: String(project.imageModel),
           imageQuality: normalizeImageQuality(project.imageQuality),
           videoRatio: normalizeVideoRatio(project.videoRatio),
+          videoModel: project.videoModel,
           artStyle: project.artStyle,
           directorManual: project.directorManual,
           ratio: STORYBOARD_BOARD_FIXED_IMAGE_RATIO,

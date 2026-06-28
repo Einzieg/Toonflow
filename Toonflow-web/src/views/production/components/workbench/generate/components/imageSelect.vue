@@ -2,7 +2,7 @@
   <div class="imageUploadBox ac">
     <!-- 单图模式 -->
     <template v-if="mode == 'singleImage' || Array.isArray(parseMode(mode as string))">
-      <div class="uploadBtn c fc" v-for="(item, index) in imageList" :key="index">
+      <div class="uploadBtn c fc" v-for="(item, index) in imageList" :key="index" @click="handleSingleImageReplace">
         <template v-if="item.src">
           <t-image :src="getItemPreviewSrc(item)" fit="contain" class="uploadPreview">
             <template #overlayContent></template>
@@ -18,8 +18,8 @@
             <span style="font-size: 20px">文</span>
           </t-tooltip>
         </template>
-        <div class="imageToolsWrap" v-if="item.sources == 'storyboard' && item.index">
-          {{ `P${item.index + 1}` }}
+        <div class="imageToolsWrap" v-if="item.sources == 'storyboard' && item.index != null">
+          {{ `${getReferenceBadgePrefix(item)}${item.index + 1}` }}
         </div>
         <button
           v-if="isPreviewableImage(item)"
@@ -30,12 +30,20 @@
           @click.stop.prevent="handlePreviewImage(item)">
           <i-expand-text-input size="14" />
         </button>
-        <div class="clearBtn" @click="splitImage(index)">
+        <button
+          v-if="isSingleImageMode"
+          type="button"
+          class="replaceBtn c"
+          @mousedown.stop
+          @click.stop.prevent="openStoryboardDialog">
+          更换
+        </button>
+        <div class="clearBtn" @click.stop="splitImage(index)">
           <i-close size="12" />
         </div>
         <div class="source">
           <t-tag size="small">
-            {{ item.sources == "storyboard" ? $t("workbench.generate.storyboard") : $t("workbench.generate.assets") }}
+            {{ item.sources == "storyboard" ? getReferenceSourceLabel(item) : $t("workbench.generate.assets") }}
           </t-tag>
         </div>
       </div>
@@ -56,8 +64,8 @@
               <span style="font-size: 20px">文</span>
             </t-tooltip>
           </template>
-          <div class="imageToolsWrap" v-if="imageList?.[index]?.sources == 'storyboard' && imageList?.[index]?.index">
-            {{ `P${imageList[index]?.index + 1}` }}
+          <div class="imageToolsWrap" v-if="imageList?.[index]?.sources == 'storyboard' && imageList?.[index]?.index != null">
+            {{ `${getReferenceBadgePrefix(imageList[index])}${imageList[index]?.index + 1}` }}
           </div>
           <button
             v-if="isPreviewableImage(imageList?.[index])"
@@ -73,7 +81,11 @@
           </div>
           <div class="source">
             <t-tag size="small">
-              {{ imageList?.[index]?.sources == "storyboard" ? $t("workbench.generate.storyboard") : $t("workbench.generate.assets") }}
+              {{
+                imageList?.[index]?.sources == "storyboard"
+                  ? getReferenceSourceLabel(imageList[index])
+                  : $t("workbench.generate.assets")
+              }}
             </t-tag>
           </div>
         </div>
@@ -83,7 +95,7 @@
         </template>
       </div>
     </template>
-    <div class="uploadBtn c fc" v-if="isShowAddImage" @click="handleMixedAdd()">
+    <div class="uploadBtn c fc" v-if="isShowAddImage" @click="handleAddReference">
       <i-plus size="24"></i-plus>
       {{ $t("workbench.generate.addReference") }}
     </div>
@@ -96,11 +108,44 @@
       width="800px"
       placement="center">
       <div class="storyboardGrid">
-        <div class="storyboardItem" v-for="sb in storyboardList" :key="sb.id" @click="pickStoryboard(sb)">
-          <img v-if="sb.src" :src="getStoryboardPreviewSrc(sb)" loading="lazy" decoding="async" />
-          <div v-else class="textBox ac jc">
-            <t-tooltip theme="primary" :content="sb?.videoDesc || ''">
-              <span style="font-size: 20px">{{ `分镜 ${sb?.index + 1 || ""}` }}</span>
+        <div class="storyboardItem" v-for="sb in storyboardList" :key="sb.id">
+          <div class="storyboardTitle">P{{ (sb.index ?? 0) + 1 }}</div>
+          <div class="variantGrid">
+            <button type="button" class="variantCard" @click="pickStoryboard(sb, 'storyboard')">
+              <img v-if="sb.src" :src="getStoryboardPreviewSrc(sb)" loading="lazy" decoding="async" />
+              <div v-else class="textBox ac jc">
+                <t-tooltip theme="primary" :content="sb?.videoDesc || ''">
+                  <span>分镜图未生成</span>
+                </t-tooltip>
+              </div>
+              <span class="variantLabel">分镜图</span>
+            </button>
+            <button type="button" class="variantCard" :class="{ disabled: !sb.gridSrc }" @click="pickStoryboard(sb, 'grid')">
+              <img v-if="sb.gridSrc" :src="getStoryboardGridPreviewSrc(sb)" loading="lazy" decoding="async" />
+              <div v-else class="textBox ac jc">
+                <t-loading v-if="sb.gridImageState === '生成中' || gridGeneratingMap[sb.id]" size="18px" />
+                <span v-else>未生成宫格</span>
+              </div>
+              <span class="variantLabel">宫格图</span>
+            </button>
+            <button type="button" class="variantCard" :class="{ disabled: !sb.tailFrameSrc }" @click="pickStoryboard(sb, 'tailFrame')">
+              <img v-if="sb.tailFrameSrc" :src="getStoryboardTailFramePreviewSrc(sb)" loading="lazy" decoding="async" />
+              <div v-else class="textBox ac jc">
+                <span>未缓存尾帧</span>
+              </div>
+              <span class="variantLabel">视频尾帧</span>
+            </button>
+          </div>
+          <div class="gridActions">
+            <t-button
+              size="small"
+              variant="outline"
+              :loading="sb.gridImageState === '生成中' || gridGeneratingMap[sb.id]"
+              @click.stop="generateGridImage(sb)">
+              {{ sb.gridSrc ? "重新生成宫格" : "生成宫格" }}
+            </t-button>
+            <t-tooltip v-if="sb.gridImageState === '生成失败'" theme="light" :content="sb.gridImageReason || '生成失败'">
+              <t-tag size="small" theme="danger">失败</t-tag>
             </t-tooltip>
           </div>
         </div>
@@ -115,6 +160,7 @@ import "@/views/production/components/workbench/type/type";
 import assetsCheck, { type AssetType, type ClipMediaType } from "@/utils/assetsCheck";
 import { getPreviewImageSrc } from "@/views/production/utils/imagePreview";
 import { openImagePreview } from "@/utils/imagePreviewOverlay";
+import axios from "@/utils/axios";
 
 const props = defineProps<{
   mode: VideoMode;
@@ -123,8 +169,13 @@ const props = defineProps<{
 const imageList = defineModel<UploadItem[]>({
   default: () => [],
 });
+const emit = defineEmits<{
+  refresh: [];
+}>();
 //分镜选择弹窗
 const storyboardDialogVisible = ref(false);
+const gridGeneratingMap = ref<Record<number, boolean>>({});
+type StoryboardReferenceImageKind = "storyboard" | "grid" | "tailFrame";
 
 /** 空占位项，用于首尾帧模式中未设置的槽位 */
 const EMPTY_SLOT: UploadItem = { fileType: "image", id: null, src: "" } as any;
@@ -140,6 +191,8 @@ const buildLabel = computed(() => {
     { label: endOptional ? "尾帧(可选)" : "尾帧", value: "end" },
   ];
 });
+
+const isSingleImageMode = computed(() => props.mode === "singleImage");
 
 /** 确保 imageList 始终有两个槽位（首帧 index=0，尾帧 index=1） */
 function ensureFrameSlots(): UploadItem[] {
@@ -196,6 +249,32 @@ function getItemPreviewSrc(item?: UploadItem) {
 function getStoryboardPreviewSrc(item: StoryboardItem) {
   return getPreviewImageSrc((item as any).thumbSrc, item.src, { width: 320, format: "webp" });
 }
+function getStoryboardGridPreviewSrc(item: StoryboardItem) {
+  return getPreviewImageSrc(undefined, item.gridSrc, { width: 320, format: "webp" });
+}
+function getStoryboardTailFramePreviewSrc(item: StoryboardItem) {
+  return getPreviewImageSrc(undefined, item.tailFrameSrc, { width: 320, format: "webp" });
+}
+function getReferenceBadgePrefix(item?: Pick<UploadItem, "referenceImageKind"> | TrackMedia) {
+  if (item?.referenceImageKind === "grid") return "宫格";
+  if (item?.referenceImageKind === "tailFrame") return "尾帧";
+  return "P";
+}
+function getReferenceSourceLabel(item?: Pick<UploadItem, "referenceImageKind"> | TrackMedia) {
+  if (item?.referenceImageKind === "grid") return "宫格图";
+  if (item?.referenceImageKind === "tailFrame") return "视频尾帧";
+  return "分镜图";
+}
+function getStoryboardReferenceSrc(sb: StoryboardItem, referenceImageKind: StoryboardReferenceImageKind) {
+  if (referenceImageKind === "grid") return sb.gridSrc;
+  if (referenceImageKind === "tailFrame") return sb.tailFrameSrc;
+  return sb.src;
+}
+function getMissingReferenceMessage(referenceImageKind: StoryboardReferenceImageKind) {
+  if (referenceImageKind === "grid") return "该分镜还没有宫格图，请先生成";
+  if (referenceImageKind === "tailFrame") return "该分镜还没有可用视频尾帧，请先生成并选择该分镜视频";
+  return "该分镜还没有分镜图";
+}
 function isPreviewableImage(item?: UploadItem) {
   return !!item?.src && item.fileType !== "video" && item.fileType !== "audio";
 }
@@ -234,6 +313,9 @@ function handleMixedAdd(slot: "start" | "end" | "" = "") {
           id: asset.id,
           prompt: asset.prompt,
           volcengineAssetUri: asset.volcengineAssetUri,
+          voiceProfile: asset.voiceProfile,
+          voiceTone: asset.voiceTone,
+          speechRate: asset.speechRate,
         };
       });
       if (slot === "start" || slot === "end") {
@@ -248,26 +330,81 @@ function handleMixedAdd(slot: "start" | "end" | "" = "") {
     },
   });
 }
+function handleAddReference() {
+  if (isSingleImageMode.value) {
+    openStoryboardDialog();
+    return;
+  }
+  handleMixedAdd();
+}
+function openStoryboardDialog() {
+  currentSlot = "";
+  storyboardDialogVisible.value = true;
+}
+function handleSingleImageReplace() {
+  if (!isSingleImageMode.value) return;
+  openStoryboardDialog();
+}
 function clearImage(index: number) {
   const list = ensureFrameSlots();
   list[index] = { ...EMPTY_SLOT };
   imageList.value = list;
 }
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function generateGridImage(sb: StoryboardItem) {
+  if (!sb.id || gridGeneratingMap.value[sb.id]) return;
+  gridGeneratingMap.value[sb.id] = true;
+  try {
+    await axios.post("/production/storyboard/generateGridImage", {
+      storyboardId: sb.id,
+      projectId: sb.projectId,
+      scriptId: sb.scriptId,
+      force: true,
+    });
+    window.$message.success("已开始生成四宫格图");
+    emit("refresh");
+    for (let i = 0; i < 40; i += 1) {
+      await sleep(3000);
+      emit("refresh");
+      const current = props.storyboardList.find((item) => item.id === sb.id);
+      if (current?.gridImageState && current.gridImageState !== "生成中") break;
+    }
+  } catch (e) {
+    window.$message.error((e as Error)?.message ?? "四宫格图生成失败");
+  } finally {
+    gridGeneratingMap.value[sb.id] = false;
+  }
+}
 /** 分镜弹窗选中回调 */
-function pickStoryboard(sb: StoryboardItem) {
+function pickStoryboard(sb: StoryboardItem, referenceImageKind: StoryboardReferenceImageKind = "storyboard") {
+  const src = getStoryboardReferenceSrc(sb, referenceImageKind);
+  if (!src) {
+    window.$message.warning(getMissingReferenceMessage(referenceImageKind));
+    return;
+  }
   storyboardDialogVisible.value = false;
   const fileType = "image";
   const newItem = {
     fileType,
     sources: "storyboard",
-    src: sb.src,
+    src,
     id: sb.id,
     prompt: sb.videoDesc ?? undefined,
     index: sb.index,
+    referenceImageKind,
+    gridSrc: sb.gridSrc,
+    gridImageState: sb.gridImageState,
+    gridImageReason: sb.gridImageReason,
+    tailFrameSrc: sb.tailFrameSrc,
+    tailFrameVideoId: sb.tailFrameVideoId,
   } as UploadItem;
 
   if (currentSlot === "start" || currentSlot === "end") {
     setFrameSlot(currentSlot, newItem);
+  } else if (isSingleImageMode.value) {
+    imageList.value = [newItem];
   } else {
     imageList.value = [...imageList.value, newItem];
   }
@@ -362,6 +499,30 @@ function splitImage(index: number) {
     &:hover .previewBtn {
       display: flex;
     }
+    .replaceBtn {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      min-width: 42px;
+      height: 24px;
+      padding: 0 8px;
+      border: none;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.68);
+      color: #fff;
+      font-size: 12px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      &:hover {
+        background: rgba(0, 0, 0, 0.88);
+      }
+    }
+    &:hover .replaceBtn {
+      display: flex;
+    }
     .clearBtn {
       position: absolute;
       top: 2px;
@@ -403,22 +564,43 @@ function splitImage(index: number) {
   }
   .storyboardGrid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
     max-height: 60vh;
     overflow-y: auto;
     padding: 4px;
     .storyboardItem {
-      cursor: pointer;
       border-radius: 8px;
       overflow: hidden;
-      border: 2px solid transparent;
-      transition:
-        border-color 0.2s,
-        box-shadow 0.2s;
-      &:hover {
-        border-color: var(--td-brand-color);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+      border: 1px solid var(--td-component-border);
+      background: var(--td-bg-color-container);
+      padding: 8px;
+      .storyboardTitle {
+        font-size: 12px;
+        color: var(--td-text-color-secondary);
+        margin-bottom: 6px;
+      }
+      .variantGrid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .variantCard {
+        position: relative;
+        display: block;
+        width: 100%;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        overflow: hidden;
+        background: var(--td-bg-color-secondarycontainer);
+        cursor: pointer;
+        &:hover {
+          border-color: var(--td-brand-color);
+        }
+        &.disabled {
+          opacity: 0.72;
+        }
       }
       img {
         width: 100%;
@@ -430,7 +612,25 @@ function splitImage(index: number) {
         aspect-ratio: 16/9;
         width: 100%;
         text-align: center;
-        border: 1px solid #ccc;
+        color: var(--td-text-color-placeholder);
+        font-size: 12px;
+      }
+      .variantLabel {
+        position: absolute;
+        left: 4px;
+        bottom: 4px;
+        padding: 0 6px;
+        border-radius: 4px;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.58);
+        font-size: 11px;
+        line-height: 18px;
+      }
+      .gridActions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
       }
     }
   }

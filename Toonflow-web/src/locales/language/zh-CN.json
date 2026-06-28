@@ -1236,7 +1236,7 @@
         "welcomeMessage": "你好！我是你的 AI 助手，有什么可以帮你的吗？",
         "adjustModel": "调整模型",
         "startMakingVideo": "开始制作视频",
-        "startMakingVideoPrompt": "请帮我开始制作视频",
+        "startMakingVideoPrompt": "请帮我开始制作视频，并默认进入自动推进模式：由你完成自动审查、自动修复和下一步推进；除非遇到必须人工决定的问题，否则不要停下来询问确认，持续执行到分镜图生成任务启动。",
         "clearMessageMemory": "清除消息记忆",
         "clearSummaryMemory": "清除摘要记忆",
         "clearAllMemory": "清除所有记忆",

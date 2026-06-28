@@ -28,9 +28,20 @@
           </t-form-item>
           <t-form-item :label="$t('workbench.assets.add.volcengineAssetUri')" name="volcengineAssetUri" v-if="props.type === 'role'">
             <t-input
-              v-model="props.formData.volcengineAssetUri"
+              v-model="volcengineAssetUriModel"
               :placeholder="$t('workbench.assets.add.volcengineAssetUriPh')"></t-input>
           </t-form-item>
+          <template v-if="props.type === 'role'">
+            <t-form-item label="声线" name="voiceProfile">
+              <t-input v-model="voiceProfileModel" placeholder="如：低沉磁性、少年感清亮、温柔女声、沙哑沧桑" />
+            </t-form-item>
+            <t-form-item label="语气" name="voiceTone">
+              <t-input v-model="voiceToneModel" placeholder="如：克制冷静、温柔坚定、急促紧张、疲惫低落" />
+            </t-form-item>
+            <t-form-item label="语速" name="speechRate">
+              <t-input v-model="speechRateModel" placeholder="如：慢速、正常、偏快、短句停顿明显" />
+            </t-form-item>
+          </template>
         </t-form>
       </div>
     </t-dialog>
@@ -51,11 +62,26 @@ const props = defineProps<{
     remark: string;
     prompt: string;
     volcengineAssetUri?: string | null;
+    voiceProfile?: string | null;
+    voiceTone?: string | null;
+    speechRate?: string | null;
   };
 }>();
 const addAssetsShow = defineModel<boolean>({
   default: false,
 });
+function nullableStringModel(key: "volcengineAssetUri" | "voiceProfile" | "voiceTone" | "speechRate") {
+  return computed({
+    get: () => props.formData[key] ?? "",
+    set: (value) => {
+      props.formData[key] = String(value ?? "");
+    },
+  });
+}
+const volcengineAssetUriModel = nullableStringModel("volcengineAssetUri");
+const voiceProfileModel = nullableStringModel("voiceProfile");
+const voiceToneModel = nullableStringModel("voiceTone");
+const speechRateModel = nullableStringModel("speechRate");
 const rules = ref<{}>({
   name: [{ required: true, message: $t("workbench.assets.add.nameRequired"), trigger: "blur" }],
   describe: [{ required: true, message: $t("workbench.assets.add.describeRequired"), trigger: "blur" }],
@@ -77,6 +103,9 @@ function onConfirm() {
             remark: props.formData.remark,
             prompt: props.formData.prompt,
             volcengineAssetUri: props.formData.volcengineAssetUri,
+            voiceProfile: props.formData.voiceProfile,
+            voiceTone: props.formData.voiceTone,
+            speechRate: props.formData.speechRate,
           })
           .then(() => {
             window.$message.success($t("workbench.assets.add.updateSuccess"));
@@ -93,6 +122,9 @@ function onConfirm() {
             projectId: project.value?.id,
             prompt: props.formData.prompt,
             volcengineAssetUri: props.formData.volcengineAssetUri,
+            voiceProfile: props.formData.voiceProfile,
+            voiceTone: props.formData.voiceTone,
+            speechRate: props.formData.speechRate,
           })
           .then(() => {
             window.$message.success($t("workbench.assets.add.addSuccess"));

@@ -80,7 +80,26 @@ function createRefTag(index: number): HTMLSpanElement {
 
   const tagContent = () => {
     if (refType === "image") {
-      return h("img", { src: refSrc, alt: "" });
+      return h("img", {
+        src: refSrc,
+        alt: "",
+        style: {
+          width: "18px",
+          height: "18px",
+          maxWidth: "18px",
+          maxHeight: "18px",
+          borderRadius: "3px",
+          objectFit: "cover",
+          flexShrink: "0",
+          display: "inline-block",
+          border: "1px solid rgba(91, 204, 179, 0.2)",
+          verticalAlign: "middle",
+        },
+        onError: (event: Event) => {
+          const img = event.target as HTMLImageElement | null;
+          if (img) img.style.display = "none";
+        },
+      });
     }
     if (refType === "video") {
       return h(Video);
@@ -100,7 +119,22 @@ function createRefTag(index: number): HTMLSpanElement {
     },
     {
       default: () => [
-        h("div", { class: "tag" }, [tagContent(), h("span", null, $t("workbench.production.editImage.reference", { index: index + 1 }))]),
+        h(
+          "div",
+          {
+            class: "tag",
+            style: {
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              maxWidth: "160px",
+              verticalAlign: "middle",
+              lineHeight: "1",
+              overflow: "hidden",
+            },
+          },
+          [tagContent(), h("span", { style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, `@图${index + 1}`)],
+        ),
       ],
     },
   );

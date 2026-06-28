@@ -6,19 +6,19 @@
     <div class="history">
       <div class="titleBox f ac">
         <i-time />
-        <span class="title">{{ $t("workbench.generate.history") }}（{{ currentTrack?.videoList.length }}）</span>
+        <span class="title">{{ $t("workbench.generate.history") }}（{{ videoList.length }}）</span>
       </div>
       <div class="historyItemBox">
         <div
           class="historyItem"
           :class="{ active: v.id === selectVideoId, generating: v.state === '生成中', failed: v.state === '生成失败' }"
-          v-for="v in currentTrack?.videoList"
+          v-for="v in videoList"
           :key="v.id"
           @click="previewVideo(v)">
           <template v-if="videoCoverMap[v.src]">
             <img :src="videoCoverMap[v.src]" class="videoCover" />
           </template>
-          <template v-else-if="v.state !== '生成中'">
+          <template v-else-if="v.state !== '生成中' && v.src">
             <video
               :key="v.src"
               :src="v.src"
@@ -46,10 +46,10 @@
               {{ $t("workbench.generate.generateFailed") }}
             </t-tag>
           </t-tooltip>
-          <div v-if="v.state !== '生成中'" class="selectBtn" @click.stop="selectVideo(v)">
+          <div v-if="!disableTrackActions && v.state !== '生成中'" class="selectBtn" @click.stop="selectVideo(v)">
             <i-check size="16" />
           </div>
-          <div class="delBtn" @click.stop="handleDeleteVideo(v)">
+          <div v-if="!disableTrackActions" class="delBtn" @click.stop="handleDeleteVideo(v)">
             <i-delete size="16" />
           </div>
           <div v-if="v.state !== '生成中' && v.state !== '生成失败'" class="download" @click.stop="downloadVideo(v)">
@@ -58,6 +58,9 @@
           <div v-if="v.state !== '生成中' && v.state !== '生成失败'" class="playBtn" @click.stop="openVideoPlayer(v)">
             <i-play size="16" />
           </div>
+        </div>
+        <div v-if="!videoList.length" class="emptyHistory c">
+          暂无视频历史
         </div>
       </div>
     </div>
@@ -85,6 +88,7 @@ import projectStore from "@/stores/project";
 const props = defineProps<{
   activeTrackIndex: number;
   generating?: boolean;
+  disableTrackActions?: boolean;
 }>();
 const currentTrack = defineModel<TrackItem>("currentTrack", {
   default: () => {},
@@ -101,9 +105,11 @@ const selectVideoId = ref();
 const videoCoverMap = ref<Record<string, string>>({});
 const videoPlayerVisible = ref(false);
 const playingVideoSrc = ref<string>();
+const videoList = computed(() => (Array.isArray(currentTrack.value?.videoList) ? currentTrack.value.videoList : []));
 
 /** 选中历史视频并同步到后端 */
 async function selectVideo(v: HistoryVideoItem) {
+  if (props.disableTrackActions) return;
   if (v.state === "生成中" || v.state === "生成失败") return;
   try {
     await axios.post("/production/workbench/selectVideo", {
@@ -121,6 +127,7 @@ async function selectVideo(v: HistoryVideoItem) {
 
 /** 删除某条历史视频 */
 function handleDeleteVideo(value: HistoryVideoItem) {
+  if (props.disableTrackActions) return;
   const dlg = DialogPlugin.confirm({
     header: $t("workbench.generate.del"),
     body: $t("workbench.generate.delVideo"),
@@ -129,7 +136,9 @@ function handleDeleteVideo(value: HistoryVideoItem) {
         window.$message.success($t("workbench.generate.delSuccess"));
         emit("refresh");
         dlg.destroy();
-        currentTrack.value.videoList.filter((item) => item.id == value.id);
+        if (currentTrack.value?.videoList) {
+          currentTrack.value.videoList = currentTrack.value.videoList.filter((item) => item.id !== value.id);
+        }
       });
     },
     onCancel: () => dlg.destroy(),
@@ -312,6 +321,15 @@ function previewVideo(v: HistoryVideoItem) {
         .playBtn {
           display: flex;
         }
+      }
+      .emptyHistory {
+        width: 100%;
+        min-height: 96px;
+        color: var(--td-text-color-placeholder);
+        border: 1px dashed var(--td-border-level-1-color);
+        border-radius: 6px;
+        background: var(--td-bg-color-secondarycontainer);
+        font-size: 13px;
       }
     }
   }

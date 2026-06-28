@@ -271,12 +271,39 @@ export default async (knex: Knex): Promise<void> => {
   await addColumn("o_prompt", "useData", "text");
   // 火山 Seedance 2.x 可用的官方/授权素材 URI，例如 asset://asset-20260225023032-gnzwk。
   await addColumn("o_assets", "volcengineAssetUri", "text");
+  // 角色视频配音提示词设置，仅 role 类型使用；衍生角色默认继承父角色设置。
+  await addColumn("o_assets", "voiceProfile", "text");
+  await addColumn("o_assets", "voiceTone", "text");
+  await addColumn("o_assets", "speechRate", "text");
+  await addColumn("o_storyboard", "shotMeta", "text");
+  await addColumn("o_storyboard", "gridImagePath", "text");
+  await addColumn("o_storyboard", "gridImagePrompt", "text");
+  await addColumn("o_storyboard", "gridImageState", "text");
+  await addColumn("o_storyboard", "gridImageReason", "text");
+  await addColumn("o_storyboard", "gridImageFlowId", "integer");
   // 视频上游直链 24 小时内可用于快速预览，本地转存完成后作为长期兜底。
   await addColumn("o_video", "remoteUrl", "text");
   await addColumn("o_video", "remoteUrlExpireTime", "integer");
   await addColumn("o_video", "localSaveState", "text");
   await addColumn("o_video", "localSaveErrorReason", "text");
   await addColumn("o_video", "externalTaskId", "text");
+  await addColumn("o_video", "prompt", "text");
+  // 轨道级手动参考图选择。存在该字段时，分镜台优先使用用户固定的参考图，不再自动回退到轨道默认分镜图。
+  await addColumn("o_videoTrack", "referenceMediaOverride", "text");
+  await createTableIfNotExists("o_videoTrackMergeSnapshot", (table) => {
+    table.integer("id").notNullable();
+    table.integer("projectId");
+    table.integer("scriptId");
+    table.integer("targetTrackId");
+    table.integer("sourceTrackId");
+    table.text("storyboards");
+    table.text("videoIds");
+    table.text("trackData");
+    table.integer("createTime");
+    table.primary(["id"]);
+    table.unique(["id"]);
+    table.index(["projectId", "scriptId", "targetTrackId"]);
+  });
   await createTableIfNotExists("o_storyboardBoard", (table) => {
     table.integer("id").notNullable();
     table.integer("projectId");
@@ -308,6 +335,16 @@ export default async (knex: Knex): Promise<void> => {
   await addColumn("o_storyboardBoard", "imageModel", "text");
   await addColumn("o_storyboardBoard", "targetDuration", "integer");
   await addColumn("o_storyboardBoard", "sourceType", "text");
+  await addColumn("o_storyboardBoard", "videoReferencePath", "text");
+  await addColumn("o_storyboardBoard", "videoReferenceMode", "text");
+  await addColumn("o_storyboardBoard", "frameManifest", "text");
+  await addColumn("o_storyboardBoard", "shotTimeline", "text");
+  await addColumn("o_storyboardBoard", "lockedNarrative", "text");
+  await db("o_storyboardBoard").where("state", "生成中").update({
+    state: "生成失败",
+    errorReason: "软件退出导致失败",
+    updateTime: Date.now(),
+  });
   await createTableIfNotExists("o_storyboardBoardVideo", (table) => {
     table.integer("id").notNullable();
     table.integer("boardId");
@@ -450,6 +487,9 @@ export default async (knex: Knex): Promise<void> => {
   await addColumn("o_storyboardFirstImage", "imageSourceHash", "text");
   await addColumn("o_storyboardFirstImage", "assetHash", "text");
   await addColumn("o_storyboardFirstImage", "referenceSnapshot", "text");
+  await addColumn("o_storyboardFirstImage", "videoReferencePath", "text");
+  await addColumn("o_storyboardFirstImage", "videoReferenceMode", "text");
+  await addColumn("o_storyboardFirstImage", "frameManifest", "text");
   await addColumn("o_storyboardFirstImage", "version", "integer");
   await addColumn("o_storyboardFirstImage", "isCurrent", "integer");
   await addColumn("o_storyboardFirstImage", "invalidatedAt", "integer");
@@ -599,9 +639,8 @@ export default async (knex: Knex): Promise<void> => {
   }
   patchVolcengineVendorRemoteVideoUrl();
   const grsaiVer = await u.vendor.getVendor("grsai").version;
-  if (Number(grsaiVer) < 2.1) {
-    const grsaiVendorPath = path.resolve(process.cwd(), "data/vendor/grsai.ts");
-    u.vendor.writeCode("grsai", fs.readFileSync(grsaiVendorPath, "utf-8"));
+  if (Number(grsaiVer) < 2.4) {
+    u.vendor.writeCode("grsai", vendorData["grsai.ts"]);
   }
 };
 

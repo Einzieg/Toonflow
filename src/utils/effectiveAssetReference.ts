@@ -12,6 +12,9 @@ export interface EffectiveAssetReference {
   describe?: string | null;
   volcengineAssetUri?: string | null;
   parentVolcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
   storyboardId?: number;
 }
 
@@ -26,6 +29,12 @@ interface AssetRow {
   describe?: string | null;
   volcengineAssetUri?: string | null;
   parentVolcengineAssetUri?: string | null;
+  voiceProfile?: string | null;
+  voiceTone?: string | null;
+  speechRate?: string | null;
+  parentVoiceProfile?: string | null;
+  parentVoiceTone?: string | null;
+  parentSpeechRate?: string | null;
 }
 
 function formatAssetName(row: AssetRow) {
@@ -53,6 +62,9 @@ async function getPreferredRoleDerivativeMap(parentRoleIds: number[]) {
       "o_assets.imageId",
       "o_assets.describe",
       "o_assets.volcengineAssetUri",
+      "o_assets.voiceProfile",
+      "o_assets.voiceTone",
+      "o_assets.speechRate",
       "o_image.filePath",
     );
 
@@ -84,6 +96,12 @@ export async function resolveEffectiveAssetReferences(assetIds: number[]) {
       "o_assets.describe",
       "o_assets.volcengineAssetUri",
       "parentAsset.volcengineAssetUri as parentVolcengineAssetUri",
+      "o_assets.voiceProfile",
+      "o_assets.voiceTone",
+      "o_assets.speechRate",
+      "parentAsset.voiceProfile as parentVoiceProfile",
+      "parentAsset.voiceTone as parentVoiceTone",
+      "parentAsset.speechRate as parentSpeechRate",
       "o_image.filePath",
     );
 
@@ -94,30 +112,33 @@ export async function resolveEffectiveAssetReferences(assetIds: number[]) {
     .filter((id) => Number.isInteger(id));
   const derivativeMap = await getPreferredRoleDerivativeMap(parentRoleIds);
 
-  return normalizedIds
-    .map((originalAssetId) => {
-      const row = rowMap.get(originalAssetId);
-      if (!row) return null;
-      const effectiveRow = row.type === "role" && row.assetsId == null ? derivativeMap.get(Number(row.id)) || row : row;
-      const parentName = row.assetsId == null ? row.name : row.parentName;
-      const name = effectiveRow.id !== row.id ? formatAssetName({ ...effectiveRow, parentName: row.name }) : formatAssetName(row);
-      const baseName = String(parentName || row.name || effectiveRow.name || "").trim();
+  const result: EffectiveAssetReference[] = [];
+  for (const originalAssetId of normalizedIds) {
+    const row = rowMap.get(originalAssetId);
+    if (!row) continue;
+    const effectiveRow = row.type === "role" && row.assetsId == null ? derivativeMap.get(Number(row.id)) || row : row;
+    const parentName = row.assetsId == null ? row.name : row.parentName;
+    const name = effectiveRow.id !== row.id ? formatAssetName({ ...effectiveRow, parentName: row.name }) : formatAssetName(row);
+    const baseName = String(parentName || row.name || effectiveRow.name || "").trim();
 
-      return {
-        id: Number(effectiveRow.id),
-        originalAssetId,
-        assetsId: effectiveRow.assetsId == null ? null : Number(effectiveRow.assetsId),
-        name,
-        baseName,
-        type: String(effectiveRow.type || row.type || ""),
-        imageId: effectiveRow.imageId == null ? null : Number(effectiveRow.imageId),
-        filePath: effectiveRow.filePath || null,
-        describe: effectiveRow.describe || row.describe || null,
-        volcengineAssetUri: effectiveRow.volcengineAssetUri || row.volcengineAssetUri || null,
-        parentVolcengineAssetUri: row.parentVolcengineAssetUri || null,
-      } satisfies EffectiveAssetReference;
-    })
-    .filter((item): item is EffectiveAssetReference => item != null);
+    result.push({
+      id: Number(effectiveRow.id),
+      originalAssetId,
+      assetsId: effectiveRow.assetsId == null ? null : Number(effectiveRow.assetsId),
+      name,
+      baseName,
+      type: String(effectiveRow.type || row.type || ""),
+      imageId: effectiveRow.imageId == null ? null : Number(effectiveRow.imageId),
+      filePath: effectiveRow.filePath || null,
+      describe: effectiveRow.describe || row.describe || null,
+      volcengineAssetUri: effectiveRow.volcengineAssetUri || row.volcengineAssetUri || null,
+      parentVolcengineAssetUri: row.parentVolcengineAssetUri || null,
+      voiceProfile: effectiveRow.voiceProfile || row.voiceProfile || row.parentVoiceProfile || null,
+      voiceTone: effectiveRow.voiceTone || row.voiceTone || row.parentVoiceTone || null,
+      speechRate: effectiveRow.speechRate || row.speechRate || row.parentSpeechRate || null,
+    });
+  }
+  return result;
 }
 
 export async function resolveEffectiveStoryboardAssetReferences(storyboardIds: number[]) {

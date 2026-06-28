@@ -8,6 +8,24 @@
     <div class="content">
       <t-empty v-if="!storyboard.length" style="margin-top: 16px"></t-empty>
       <div v-else class="frameGridWrap">
+        <div class="batchBar">
+          <div class="batchLeft">
+            <t-checkbox
+              :checked="isAllSelectableSelected"
+              :indeterminate="isPartiallySelected"
+              :disabled="!selectableStoryboardIds.length || generateLoading"
+              @change="toggleSelectAll">
+              全选可生成分镜
+            </t-checkbox>
+            <span class="batchCount">已选 {{ selectedStoryboardIds.length }} / {{ selectableStoryboardIds.length }}</span>
+          </div>
+          <div class="batchActions">
+            <t-button size="small" variant="outline" :disabled="!selectedStoryboardIds.length || generateLoading" @click="clearSelection">清空选择</t-button>
+            <t-button size="small" theme="primary" :disabled="!selectedStoryboardIds.length || generateLoading" :loading="generateLoading" @click="regenerateSelectedImages">
+              重新生成选中
+            </t-button>
+          </div>
+        </div>
         <div class="frameGrid">
           <storyboardFrameItem
             v-for="(item, index) in storyboard"
@@ -18,6 +36,9 @@
             :style-max-size="styleMaxSize"
             :tag-color="tagColors[index % tagColors.length]"
             :display-src="getStoryboardDisplaySrc(item)"
+            :selectable="isStoryboardSelectable(item)"
+            :selected="isStoryboardSelected(item.id)"
+            @toggle-selected="(selected) => toggleStoryboardSelection(item.id, selected)"
             @open="editStoryboaryImage(item, item.src ? [item.src] : [])"
             @remove="removeFn(item.id!)"
             @edit-info="editInfo(item)"
@@ -31,15 +52,10 @@
       </div>
       <div class="ac" style="gap: 10px">
         <t-button block @click="previewAll" :disabled="!storyboard.length">{{ $t("workbench.production.node.storyboard.gridPreview") }}</t-button>
-        <t-button block @click="batchGenerateImage" :disabled="!storyboardIdsToGenerate.length" :loading="generateLoading">
-          {{ $t("workbench.production.node.storyboard.batchGenerateImage") }}
+        <t-button block @click="batchGenerateImage" :disabled="!canBatchGenerateImage" :loading="generateLoading">
+          {{ batchGenerateButtonText }}
         </t-button>
       </div>
-      <storyboardBoardPanel
-        :project-id="Number(project?.id) || undefined"
-        :script-id="episodesId"
-        :storyboard="storyboard"
-        :project-video-model="project?.videoModel" />
     </div>
     <editImage v-model="visible" v-if="visible" :flowData="currentRow" type="storyboard" @save="save" />
     <t-image-viewer
@@ -55,8 +71,7 @@
 import { defineAsyncComponent } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import storyboardFrameItem from "./storyboardFrameItem.vue";
-import storyboardBoardPanel from "./storyboardBoardPanel.vue";
-import { LoadingPlugin } from "tdesign-vue-next";
+import { DialogPlugin, LoadingPlugin } from "tdesign-vue-next";
 import { Handle, Position, type Edge } from "@vue-flow/core";
 import axios from "@/utils/axios";
 import type { AssetItem, Storyboard } from "../utils/flowBuilder";
@@ -84,6 +99,7 @@ const previewVisible = ref(false);
 const previewImages = ref<string[]>([]);
 const gridScale = useLocalStorage("storyboardGridScale", 1);
 const generateLoading = ref(false);
+const selectedStoryboardIds = ref<number[]>([]);
 
 const currentRow = ref<{
   flowId?: number | null;
@@ -166,7 +182,7 @@ const allStoryboardIds = computed(() =>
   Array.from(
     new Set(
       (storyboard.value ?? [])
-        .filter((item) => item.id && item.shouldGenerateImage !== 0 && item.prompt?.trim())
+        .filter((item) => item.id && item.shouldGenerateImage !== 0 && item.state !== "生成中" && item.prompt?.trim())
         .map((item) => item.id as number),
     ),
   ),
@@ -177,10 +193,54 @@ const pendingStoryboardIds = computed(() =>
     return !item?.src || item.state === "未生成" || item.state === "生成失败";
   }),
 );
-const storyboardIdsToGenerate = computed(() => pendingStoryboardIds.value.length ? pendingStoryboardIds.value : allStoryboardIds.value);
+const storyboardIdsToGenerate = computed(() => pendingStoryboardIds.value);
+const selectableStoryboardIds = computed(() => allStoryboardIds.value);
+const selectedStoryboardIdSet = computed(() => new Set(selectedStoryboardIds.value));
+const isAllSelectableSelected = computed(
+  () => selectableStoryboardIds.value.length > 0 && selectableStoryboardIds.value.every((id) => selectedStoryboardIdSet.value.has(id)),
+);
+const isPartiallySelected = computed(() => selectedStoryboardIds.value.length > 0 && !isAllSelectableSelected.value);
+const selectedRegeneratableIds = computed(() => selectedStoryboardIds.value.filter((id) => selectableStoryboardIds.value.includes(id)));
+const canBatchGenerateImage = computed(() => !generateLoading.value && (selectedRegeneratableIds.value.length > 0 || storyboardIdsToGenerate.value.length > 0));
+const batchGenerateButtonText = computed(() =>
+  selectedRegeneratableIds.value.length > 0 ? `重新生成选中（${selectedRegeneratableIds.value.length}）` : "生成未生成/失败分镜",
+);
+
+function isStoryboardSelectable(item: Storyboard) {
+  return Boolean(item.id && item.shouldGenerateImage !== 0 && item.state !== "生成中" && item.prompt?.trim());
+}
+
+function isStoryboardSelected(id?: number) {
+  return id != null && selectedStoryboardIdSet.value.has(id);
+}
+
+function toggleStoryboardSelection(id: number | undefined, selected: boolean) {
+  if (id == null) return;
+  if (!selectableStoryboardIds.value.includes(id)) return;
+  if (selected) {
+    if (!selectedStoryboardIds.value.includes(id)) selectedStoryboardIds.value.push(id);
+  } else {
+    selectedStoryboardIds.value = selectedStoryboardIds.value.filter((itemId) => itemId !== id);
+  }
+}
+
+function toggleSelectAll(selected: boolean) {
+  selectedStoryboardIds.value = selected ? [...selectableStoryboardIds.value] : [];
+}
+
+function clearSelection() {
+  selectedStoryboardIds.value = [];
+}
 
 async function batchGenerateImage() {
-  if (!storyboardIdsToGenerate.value.length) return;
+  if (selectedRegeneratableIds.value.length) {
+    regenerateSelectedImages();
+    return;
+  }
+  if (!storyboardIdsToGenerate.value.length) {
+    window.$message.warning("没有未生成/失败的分镜；如需重生成指定图片，请先勾选分镜图。");
+    return;
+  }
   LoadingPlugin(true);
   generateLoading.value = true;
   try {
@@ -192,6 +252,57 @@ async function batchGenerateImage() {
     generateLoading.value = false;
     LoadingPlugin(false);
   }
+}
+
+async function runStoryboardRegeneration(ids: number[]) {
+  if (!ids.length) return;
+  LoadingPlugin(true);
+  generateLoading.value = true;
+  try {
+    const data = await productionAgent.batchGenerateStoryboard(ids);
+    const returnedIds = new Set((Array.isArray(data) ? data : []).map((item: { id?: number }) => item.id).filter(Boolean));
+    if (!returnedIds.size) {
+      await productionAgent.getFlowData();
+      window.$message.warning("已发送重新生成请求，但服务端未返回可生成分镜，请检查当前分集或分镜提示词");
+      return;
+    }
+
+    const missingCount = ids.filter((id) => !returnedIds.has(id)).length;
+    await productionAgent.getFlowData();
+    clearSelection();
+    if (missingCount > 0) {
+      window.$message.warning(`已发起 ${returnedIds.size} 张分镜图重新生成，${missingCount} 张未被服务端接收`);
+    } else {
+      window.$message.success(`已发起 ${ids.length} 张分镜图重新生成`);
+    }
+  } catch (e) {
+    await productionAgent.getFlowData();
+    window.$message.error((e as Error)?.message ?? "选中分镜图重新生成失败");
+  } finally {
+    generateLoading.value = false;
+    LoadingPlugin(false);
+  }
+}
+
+function regenerateSelectedImages() {
+  const ids = selectedStoryboardIds.value.filter((id) => selectableStoryboardIds.value.includes(id));
+  if (!ids.length) return;
+
+  const dialog = DialogPlugin.confirm({
+    header: "重新生成选中分镜图",
+    body: `将重新生成已勾选的 ${ids.length} 张分镜图。已有图片会被新结果覆盖，分镜文字、资产关联和视频轨道不会删除。`,
+    confirmBtn: "重新生成",
+    cancelBtn: $t("settings.memory.msg.cancel"),
+    theme: "warning",
+    onConfirm: async () => {
+      try {
+        await runStoryboardRegeneration(ids);
+      } finally {
+        dialog.destroy();
+      }
+    },
+    onCancel: () => dialog.destroy(),
+  });
 }
 function resolveStoryboardAssetImage(id: number) {
   const asset = props.assetsData.find((a) => a.id === id);
@@ -297,6 +408,15 @@ async function save({ imageUrl, flowId }: { imageUrl: string; flowId: number }) 
   });
 }
 
+watch(
+  selectableStoryboardIds,
+  (ids) => {
+    const idSet = new Set(ids);
+    selectedStoryboardIds.value = selectedStoryboardIds.value.filter((id) => idSet.has(id));
+  },
+  { immediate: true },
+);
+
 async function removeFn(id: number) {
   const dialog = DialogPlugin.confirm({
     header: $t("workbench.assets.confirmDeleteHeader"),
@@ -331,14 +451,37 @@ async function removeFn(id: number) {
   });
 }
 
+function formatShotTimingMeta(item: Storyboard) {
+  const meta = item.shotMeta;
+  if (!meta) return "";
+  return [
+    item.duration != null ? `分镜时长：${item.duration}s` : "",
+    meta.dialogueCharCount != null ? `台词字数：${meta.dialogueCharCount}` : "",
+    meta.estimatedSpeechRate ? `估算语速：${meta.estimatedSpeechRate}` : "",
+    meta.estimatedSpeechDuration != null ? `口播时长：${meta.estimatedSpeechDuration}s` : "",
+    meta.durationReason ? `依据：${meta.durationReason}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function editInfo(item: Storyboard) {
   const formData = reactive({
     prompt: item.prompt ?? "",
     videoDesc: item?.videoDesc ?? "",
   });
+  const timingText = formatShotTimingMeta(item);
 
   const bodyVNode = () =>
     h("div", { class: "editInfoForm" }, [
+      ...(timingText
+        ? [
+            h("div", { class: "editInfoField" }, [
+              h("label", { class: "editInfoLabel" }, "Agent 时长依据"),
+              h("pre", { class: "timingMetaText" }, timingText),
+            ]),
+          ]
+        : []),
       h("div", { class: "editInfoField" }, [
         h("label", { class: "editInfoLabel" }, $t("workbench.production.node.storyboard.prompt")),
         h(resolveComponent("t-textarea"), {
@@ -417,12 +560,39 @@ function editInfo(item: Storyboard) {
 
   .frameGridWrap {
     max-width: min(84vw, 1280px);
-    max-height: min(72vh, 980px);
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: visible;
     content-visibility: auto;
     contain: layout style;
     contain-intrinsic-size: auto 720px;
+  }
+
+  .batchBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--td-component-border);
+    border-radius: 8px;
+    background: var(--td-bg-color-container);
+  }
+
+  .batchLeft,
+  .batchActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .batchLeft {
+    flex-wrap: wrap;
+  }
+
+  .batchCount {
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+    white-space: nowrap;
   }
 
   .frameGrid {
@@ -471,5 +641,17 @@ function editInfo(item: Storyboard) {
 .editInfoLabel {
   font-size: 13px;
   color: var(--td-text-color-secondary);
+}
+
+.timingMetaText {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--td-component-border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  font-size: 12px;
+  color: var(--td-text-color-primary);
+  background: var(--td-bg-color-container-hover);
 }
 </style>

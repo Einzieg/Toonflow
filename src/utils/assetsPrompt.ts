@@ -4,6 +4,7 @@ type BuildRoleAssetPromptInput = {
   prompt?: string | null;
   artStyle?: string | null;
   derivative?: boolean;
+  promptPreset?: string | null;
 };
 
 type AssetPromptType = "role" | "scene" | "tool";
@@ -325,6 +326,84 @@ export function buildAssetStyleGuard(artStyle?: string | null) {
   return ASSET_STYLE_GUARD[artStyle || ""] || DEFAULT_STYLE_GUARD;
 }
 
+const YAOYAN_PRESET_MARKER = "[女性风格预设: 妖艳]";
+const YAOYAN_ADULT_BODY_DESCRIBE =
+  "成年女性，胸围36D观感，体态丰盈匀称，腰臀曲线明显，肩颈舒展，体态自信，成熟妩媚，带抹胸，大长腿，双腿修长笔直，腿部线条直而干净，高级性感但衣着完整";
+const YAOYAN_CLOTHING_PRIORITY =
+  "剧情/角色原始服装优先，若妖艳服装方向与剧情服装、时代服装、职业服装或角色原始服装冲突，必须按剧情服装生成，不要替换成礼服、西装、风衣、霓裳羽衣或其他预设服装，只在原服装上增强丝绸质感、盘扣立领、贴合剪裁、垂坠面料、亮片皮革、腰线收束、珠宝光泽、薄纱叠层、飘带、材质层次或华丽配饰";
+const YAOYAN_BANDEAU_CONSTRAINT =
+  "可采用外层低位浅V小开口剪裁，但必须带抹胸，胸前由同色或同材质抹胸完整覆盖，抹胸上沿位于胸部高度约三分之二处形成稳定遮挡层，V线不直接露肤，主要突出锁骨、肩颈和服装层次，不出现胸前暴露、裸露胸部、过低领口、低俗挑逗姿态或成人化动作";
+const YAOYAN_JUVENILE_DESCRIBE =
+  "风格补充：妖艳。华丽灵动、精致奢华、衣着完整，以丝绸、盘扣、立领、亮片、飘带、层叠薄纱和珠宝光泽表达妩媚气质，不强调性感、丰满或成熟身体曲线。";
+const YAOYAN_FINAL_PROMPT_FRAGMENT =
+  "妖艳风格融合：成年女性，胸围36D观感，带抹胸，外层浅V小开口，胸前由抹胸完整覆盖，肩颈舒展，腰臀曲线明显，大长腿，双腿修长笔直；若与剧情服装冲突，按剧情服装保留身份，只增强材质层次与成熟妩媚气质。";
+const YAOYAN_REQUIRED_FINAL_PROMPT_KEYWORDS = ["36D", "抹胸", "浅V", "大长腿"];
+
+function resolveRolePromptPreset(promptPreset?: string | null, prompt?: string | null, describe?: string | null) {
+  const source = [prompt, describe].map((item) => normalizeText(item)).filter(Boolean).join("\n");
+  return promptPreset || (source.includes(YAOYAN_PRESET_MARKER) || /风格补充：妖艳|妖艳风格融合|女性风格预设[:：]\s*妖艳/.test(source) ? "yaoyan" : "");
+}
+
+export function buildRolePromptPresetInstruction(type?: string | null, promptPreset?: string | null, prompt?: string | null, describe?: string | null) {
+  const preset = resolveRolePromptPreset(promptPreset, prompt, describe);
+  if (type !== "role" || preset !== "yaoyan") {
+    return "";
+  }
+
+  return [
+    "女性角色风格预设：妖艳。仅当资产为成年女性角色时执行；如果角色描述不是女性，忽略本预设；如果角色明显未成年、幼态或少女化，只保留华丽、灵动、衣着完整，不执行性感方向。",
+    `剧情/角色原始服装优先级最高。妖艳预设只能作为气质、材质、剪裁、配饰和体态增强；${YAOYAN_CLOTHING_PRIORITY}。`,
+    `体态方向：需要更丰满、更成熟、更有女性曲线；最终提示词必须明确包含${YAOYAN_ADULT_BODY_DESCRIBE}。`,
+    "现代方向仅在不冲突时参考：丝绸质感、盘扣、立领、现代奢华材质与冷艳气场；通过贴合剪裁、垂坠面料、腰线收束和珠宝光泽表达高级性感，不强制更换服装品类。",
+    `派对女王方向仅在不冲突时参考：紧身胸衣廓形、皮革、亮片、夸张腰带、强势华丽；${YAOYAN_BANDEAU_CONSTRAINT}；性感来自剪裁、姿态、材质反光和气场。`,
+    "古代方向仅在不冲突时参考：盛唐华丽开放感、健康丰满体态、薄纱叠层但有完整内衬、飘带、浪漫飘逸、含蓄朦胧美、松弛披搭和随性层次；如果剧情服装是宫装、战甲、粗布、囚衣、职业装等，必须保留原服装身份，只增强材质层次和妖艳气质。",
+    `最终提示词必须呈现高级、妖艳、奢华、不违规的性感；必须同步保留：${YAOYAN_ADULT_BODY_DESCRIBE}；${YAOYAN_BANDEAU_CONSTRAINT}。`,
+  ].join("\n");
+}
+
+function stripRolePromptPresetDescribe(describe?: string | null) {
+  return normalizeText(describe)
+    .replace(/\n?风格补充：妖艳[\s\S]*?(?=\n风格补充：|$)/g, "")
+    .replace(/\n?风格补充：成年女性[\s\S]*?(?=\n风格补充：|$)/g, "")
+    .trim();
+}
+
+function isJuvenileRoleDescribe(describe?: string | null) {
+  return /未成年|幼女|小女孩|女童|儿童|孩童|萝莉|少女|学生|校服/.test(normalizeText(describe));
+}
+
+export function buildRolePromptPresetDescribe(type?: string | null, describe?: string | null, promptPreset?: string | null, prompt?: string | null) {
+  const preset = resolveRolePromptPreset(promptPreset, prompt, describe);
+  const baseDescribe = stripRolePromptPresetDescribe(describe);
+  if (type !== "role" || preset !== "yaoyan") {
+    return baseDescribe;
+  }
+
+  const presetDescribe = isJuvenileRoleDescribe(baseDescribe)
+    ? YAOYAN_JUVENILE_DESCRIBE
+    : `风格补充：妖艳。${YAOYAN_ADULT_BODY_DESCRIBE}；${YAOYAN_CLOTHING_PRIORITY}，并可加入同色或同材质抹胸内搭。${YAOYAN_BANDEAU_CONSTRAINT}。`;
+
+  return [baseDescribe, presetDescribe].filter(Boolean).join("\n");
+}
+
+export function enforceRolePromptPresetFinalPrompt(
+  type?: string | null,
+  finalPrompt?: string | null,
+  promptPreset?: string | null,
+  sourcePrompt?: string | null,
+) {
+  const preset = resolveRolePromptPreset(promptPreset, [sourcePrompt, finalPrompt].filter(Boolean).join("\n"));
+  const normalizedPrompt = normalizeText(finalPrompt);
+  if (type !== "role" || preset !== "yaoyan" || !normalizedPrompt) {
+    return normalizedPrompt;
+  }
+  const missingRequiredKeyword = YAOYAN_REQUIRED_FINAL_PROMPT_KEYWORDS.some((keyword) => !normalizedPrompt.includes(keyword));
+  if (!missingRequiredKeyword) {
+    return normalizedPrompt;
+  }
+  return [YAOYAN_FINAL_PROMPT_FRAGMENT, normalizedPrompt].filter(Boolean).join("\n");
+}
+
 export function buildStoryboardImageStylePrompt(artStyle?: string | null) {
   const styleSummary = STORYBOARD_IMAGE_STYLE_SUMMARY[artStyle || ""] || "严格遵循项目当前选择的分镜图画风。";
   return `${styleSummary}\n${buildAssetStyleGuard(artStyle)}`;
@@ -351,6 +430,8 @@ export function buildRoleAssetPrompt(input: BuildRoleAssetPromptInput) {
   const roleText = [name, describe].filter(Boolean).join(" ");
   const nonHumanRole = isNonHumanRole(roleText);
   const anchors = extractPromptAnchors(input.prompt, { nonHumanRole });
+  const rolePromptPreset = resolveRolePromptPreset(input.promptPreset, input.prompt, input.describe);
+  const juvenileRole = isJuvenileRoleDescribe(describe);
   const styleSummary = ROLE_STYLE_SUMMARY[input.artStyle || ""] || "遵循项目既定画风与材质风格，保持角色识别清晰。";
   const styleGuard = buildAssetStyleGuard(input.artStyle);
 
@@ -368,6 +449,19 @@ export function buildRoleAssetPrompt(input: BuildRoleAssetPromptInput) {
       ? "该角色不是标准真人模特。必须完整保留非人、异形、能量体、机械体、无性别体或符号化结构特征，绝对不要自动人类化。"
       : "如果是人类角色，必须保留描述中已有的性别、年龄感、五官气质、发型、服装、体型与状态，不要擅自改动。",
     nonHumanRole ? "不要补出人类皮肤、头发、眉眼鼻唇、妆容、内衣、模特站姿或标准男女脸。" : "",
+    rolePromptPreset === "yaoyan" && !nonHumanRole && !juvenileRole
+      ? input.derivative
+        ? `女性角色衍生图必须参考“妖艳”提示词：继承成年女性成熟妩媚、体态自信、材质华丽、剪裁精致、配饰高级和腿部线条修长笔直的方向；同步保留${YAOYAN_ADULT_BODY_DESCRIBE}。`
+        : `女性角色图必须参考“妖艳”提示词：${YAOYAN_ADULT_BODY_DESCRIBE}。`
+      : "",
+    rolePromptPreset === "yaoyan" && !nonHumanRole && !juvenileRole
+      ? input.derivative
+        ? `服装冲突时以剧情服装优先：当前衍生资产描述中的服装/状态 > 父角色原始服装 > 妖艳预设服装参考。不得把剧情服装替换成礼服、西装、风衣、霓裳羽衣等预设服装；只允许在剧情服装上增强丝绸/皮革/亮片/盘扣/立领/垂坠面料、贴合剪裁、腰线收束、珠宝光泽、薄纱叠层、飘带、材质层次和成熟妩媚气质。${YAOYAN_BANDEAU_CONSTRAINT}。`
+        : `${YAOYAN_CLOTHING_PRIORITY}。${YAOYAN_BANDEAU_CONSTRAINT}。`
+      : "",
+    rolePromptPreset === "yaoyan" && !nonHumanRole && juvenileRole
+      ? "该角色存在未成年/少女化风险，只保留妖艳预设中的华丽灵动、精致奢华、衣着完整和材质层次，不执行性感体态方向。"
+      : "",
     "如果原描述没有明确某项，不要自行补成默认深棕长发、默认妆容、默认年轻男女模特、默认基础内衣模板。",
     "只提炼与角色识别有关的视觉锚点：头部结构、五官或无五官特征、发型或头部特征、体型比例、服装或外壳、材质、符号、伤痕、颜色、发光部位。",
     "输出形式：同一画面展示肖像特写、正视图、侧视图、后视图；四视图必须是同一个角色，外观完全一致。",
